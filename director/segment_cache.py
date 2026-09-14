@@ -24,6 +24,7 @@ from .h3_motion_context import (
     trim_export_tail,
 )
 from .plan import (
+    continuity_predecessor_index,
     DirectorPlan,
     SegmentPlan,
     normalize_segment_seed_mode,
@@ -118,15 +119,9 @@ def _cache_root(node_id: str) -> Path | None:
 
 def _previous_run_segment(seg: SegmentPlan, plan: DirectorPlan) -> SegmentPlan | None:
     segments = list(getattr(plan, "segments", None) or [])
-    run_indices = getattr(plan, "run_indices", None)
-    run_list = sorted(run_indices) if run_indices is not None else list(range(len(segments)))
-    try:
-        position = run_list.index(int(seg.index))
-    except ValueError:
+    previous_index = continuity_predecessor_index(plan, seg)
+    if previous_index is None:
         return None
-    if position <= 0:
-        return None
-    previous_index = run_list[position - 1]
     return segments[previous_index] if 0 <= previous_index < len(segments) else None
 
 

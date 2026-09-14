@@ -36,6 +36,7 @@ from .segment_runtime import (
     resolve_segment_raw_clip,
 )
 from .plan import (
+    continuity_predecessor_index,
     DirectorPlan,
     apply_lora_trigger_to_prompt,
     official_ref_image_size,
@@ -475,9 +476,9 @@ def execute_director_plan_core(
     run_list = sorted(run_indices)
     seg_total = len(run_list)
     progress_pos = {idx: pos for pos, idx in enumerate(run_list)}
-    previous_run_index = {
-        idx: (run_list[pos - 1] if pos > 0 else None)
-        for pos, idx in enumerate(run_list)
+    continuity_predecessors = {
+        idx: continuity_predecessor_index(plan, all_segments[idx])
+        for idx in run_list
     }
     # External groups may compact selected packs to 0..N-1 while UI still shows
     # the full group list — prefer original timeline card count for progress UI.
@@ -591,7 +592,7 @@ def execute_director_plan_core(
         # ── Continuity gate ─────────────────────────────────────────────
         # OFF → official MiniMax H3 path only (no prev load / pin / patch).
         # ON  → after stock conditioning, pin previous AV tail (incl. r2v/v2v/rv2v).
-        prev_idx = previous_run_index.get(seg.index)
+        prev_idx = continuity_predecessors.get(seg.index)
         continuity_active = is_continuity_active(plan, seg) and prev_idx is not None
         prev_tail = None
         prev_av = None
@@ -653,6 +654,15 @@ def execute_director_plan_core(
                 )
                 if prev_audio is not None:
                     completed_audios[prev_idx] = prev_audio
+            if (
+                bool(getattr(seg, "continuity_force_prev_cache", False))
+                and prev_tail is None
+                and prev_av is None
+            ):
+                raise ValueError(
+                    f"段间引导：片段 #{seg.index + 1} 已启用「强制」，但紧邻上一段 "
+                    f"#{prev_idx + 1} 没有有效缓存。请先运行上一段，或取消「强制」。"
+                )
             if prev_handoff:
                 prev_end_frame = handoff_end_frame(
                     trim_frames=int(prev_handoff.get("trim_frames") or 0),
@@ -1356,7 +1366,7 @@ def execute_director_plan_core(
     for seg in all_segments:
         if seg.index not in run_indices:
             continue
-        prev_run_idx = previous_run_index.get(seg.index)
+        prev_run_idx = continuity_predecessors.get(seg.index)
         # AV latent and decoded refine-pass clips are a rolling continuity
         # working set, not final outputs. At the start of segment N, only N-1
         # can still be consumed; older entries have already been persisted.

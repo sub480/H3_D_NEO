@@ -13,6 +13,7 @@ import {
     framesToDurationSec,
     imageBatchVariant,
     isContinuityMasterEnabled,
+    isSegmentContinuityForcePrevCache,
     isSegmentContinuityFromPrev,
     isMixedTask,
     isVideoBatchTask,
@@ -59,6 +60,7 @@ import {
 import {
     SLOT_UI_STYLES,
     beginSlotLoad,
+    bindImageClipboardPaste,
     bindKindSlotDnD,
     bindSlotActivate,
     countFilledOnIndices,
@@ -1356,6 +1358,7 @@ function appendMixedFl2vSlots(card, editor, seg, index) {
             const image = files.find(isBatchImageFile);
             if (image) void assignSegFl2vFromFile(editor, index, kind, image);
         });
+        bindImageClipboardPaste(src, (file) => assignSegFl2vFromFile(editor, index, kind, file));
         wrap.appendChild(src);
         if (file) {
             const x = document.createElement("span");
@@ -1473,6 +1476,7 @@ function bindBatchKindSlot(slotEl, editor, index, kind, slotIndex, hasMedia, onD
             onReplace: onPick,
         }),
     });
+    if (kind === "image") bindImageClipboardPaste(slotEl, onDropFile);
 }
 
 function removeSegRef(editor, index, slot) {
@@ -3454,12 +3458,15 @@ function appendBatchCard(list, editor, seg, index, ctx) {
             const contCb = document.createElement("input");
             contCb.type = "checkbox";
             contCb.className = "bd-batch-continuity-check";
-            const canReferencePrevious = editor.previousRunSegmentIndex?.(index) != null;
-            contCb.checked = canReferencePrevious && isSegmentContinuityFromPrev(seg, index);
-            contCb.disabled = !canReferencePrevious;
+            contCb.checked = isSegmentContinuityFromPrev(seg, index);
             contCb.onchange = (e) => {
                 e.stopPropagation();
                 seg.continuityFromPrev = !!contCb.checked;
+                if (!contCb.checked) {
+                    seg.continuityForcePrevCache = false;
+                    forceCb.checked = false;
+                }
+                forceCb.disabled = !contCb.checked;
                 // Flush timeline_data immediately so Queue Prompt cannot race the debounce.
                 editor.commit?.(false, { syncTimeline: true });
                 editor.flushTimelineSync?.();
@@ -3470,9 +3477,29 @@ function appendBatchCard(list, editor, seg, index, ctx) {
             contText.textContent = t("batch.continuityFromPrev");
             contLabel.appendChild(contCb);
             contLabel.appendChild(contText);
-            continuityLabel = contLabel;
+            const forceLabel = document.createElement("label");
+            forceLabel.className = "bd-batch-continuity";
+            forceLabel.title = t("tooltip.segmentContinuityForcePrevCache");
+            const forceCb = document.createElement("input");
+            forceCb.type = "checkbox";
+            forceCb.className = "bd-batch-continuity-force-check";
+            forceCb.checked = contCb.checked && isSegmentContinuityForcePrevCache(seg, index);
+            forceCb.disabled = !contCb.checked;
+            forceCb.onchange = (e) => {
+                e.stopPropagation();
+                seg.continuityForcePrevCache = !!forceCb.checked;
+                editor.commit?.(false, { syncTimeline: true });
+                editor.flushTimelineSync?.();
+            };
+            forceCb.onclick = (e) => e.stopPropagation();
+            const forceText = document.createElement("span");
+            forceText.setAttribute("data-i18n", "batch.continuityForcePrevCache");
+            forceText.textContent = t("batch.continuityForcePrevCache");
+            forceLabel.appendChild(forceCb);
+            forceLabel.appendChild(forceText);
+            continuityLabel = [contLabel, forceLabel];
         }
-        if (continuityLabel) head.appendChild(continuityLabel);
+        if (continuityLabel) head.append(...continuityLabel);
         const meta = document.createElement("div");
         meta.className = "bd-batch-head-meta";
         if (!externalLocked) {
@@ -3631,6 +3658,7 @@ function appendBatchCard(list, editor, seg, index, ctx) {
                 const file = files.find(isBatchImageFile);
                 if (file) void assignSegSourceFromFile(editor, index, file);
             });
+            bindImageClipboardPaste(src, (file) => assignSegSourceFromFile(editor, index, file));
             if (file) {
                 const x = document.createElement("span");
                 x.className = "x";

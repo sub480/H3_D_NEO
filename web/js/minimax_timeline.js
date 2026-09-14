@@ -17,6 +17,7 @@ import {
     isCustomAspectRatio,
     isMixedTask,
     isPromptBatchTask,
+    isSegmentContinuityForcePrevCache,
     isSegmentContinuityFromPrev,
     isVideoBatchTask,
     MAX_GEN_FRAMES,
@@ -95,6 +96,7 @@ import {
 } from "./minimax_ref_audio.js";
 import {
     beginSlotLoad,
+    bindImageClipboardPaste,
     bindKindSlotDnD,
     bindSlotActivate,
     endSlotLoad,
@@ -2397,6 +2399,7 @@ class H3_D_NEOEditor {
                 taskType: resolveTaskKey(segment.taskType || "t2v"),
                 durationSec: Math.round(durationSec),
                 continuityFromPrev: isSegmentContinuityFromPrev(segment, index),
+                continuityForcePrevCache: isSegmentContinuityForcePrevCache(segment, index),
                 passMode: resolveSegmentPassMode(segment),
             };
         });
@@ -2824,6 +2827,7 @@ class H3_D_NEOEditor {
                     endImage: clean.endImage || null,
                     sourceVideo: clean.sourceVideo,
                     continuityFromPrev: isSegmentContinuityFromPrev(clean, index),
+                    continuityForcePrevCache: isSegmentContinuityForcePrevCache(clean, index),
                     refImageSize: resolveSegmentRefImageSize(clean, this.timeline.output),
                     passMode: resolveSegmentPassMode(clean),
                     seedMode: clean.seedMode || "inherit",
@@ -3179,6 +3183,10 @@ class H3_D_NEOEditor {
                         <input type="checkbox" data-r="seg-continuity-from-prev">
                         <span data-i18n="batch.continuityFromPrev">引用上段</span>
                     </label>
+                    <label class="bd-seg-continuity hidden" data-r="seg-continuity-force-prev-wrap" hidden>
+                        <input type="checkbox" data-r="seg-continuity-force-prev">
+                        <span data-i18n="batch.continuityForcePrevCache">强制</span>
+                    </label>
                     <div class="bd-meta" data-r="seg-info"></div>
                     <label class="bd-seg-refsize hidden" data-r="seg-ref-image-size-wrap" hidden data-i18n-title="tooltip.refImageSize">
                         <span data-i18n="output.refImageSize.label">参考图尺寸</span>
@@ -3342,6 +3350,8 @@ class H3_D_NEOEditor {
         this.segLabel = this.root.querySelector('[data-r="seg-label"]');
         this.segContinuityFromPrevWrap = this.root.querySelector('[data-r="seg-continuity-from-prev-wrap"]');
         this.segContinuityFromPrevCb = this.root.querySelector('[data-r="seg-continuity-from-prev"]');
+        this.segContinuityForcePrevWrap = this.root.querySelector('[data-r="seg-continuity-force-prev-wrap"]');
+        this.segContinuityForcePrevCb = this.root.querySelector('[data-r="seg-continuity-force-prev"]');
         this.segRefImageSizeWrap = this.root.querySelector('[data-r="seg-ref-image-size-wrap"]');
         this.segRefImageSize = this.root.querySelector('[data-r="seg-ref-image-size"]');
         this.segInfo = this.root.querySelector('[data-r="seg-info"]');
@@ -3712,16 +3722,34 @@ class H3_D_NEOEditor {
                 const seg = this.timeline.segments?.[this.selectedIndex];
                 if (!seg || this.selectedIndex <= 0) return;
                 seg.continuityFromPrev = !!this.segContinuityFromPrevCb.checked;
+                if (!seg.continuityFromPrev) {
+                    seg.continuityForcePrevCache = false;
+                }
                 this.commit(true);
+                this.syncSegmentContinuityFromPrevUI();
             };
             this.segContinuityFromPrevWrap?.setAttribute(
                 "title",
                 t("tooltip.segmentContinuityFromPrev"),
             );
         }
+        if (this.segContinuityForcePrevCb) {
+            this.segContinuityForcePrevCb.onchange = () => {
+                const seg = this.timeline.segments?.[this.selectedIndex];
+                if (!seg || this.selectedIndex <= 0) return;
+                seg.continuityForcePrevCache = !!this.segContinuityForcePrevCb.checked;
+                this.commit(true);
+            };
+            this.segContinuityForcePrevWrap?.setAttribute(
+                "title",
+                t("tooltip.segmentContinuityForcePrevCache"),
+            );
+        }
 
         this.genGlobalImg?.addEventListener("click", (e) => { stopDomEvent(e); this.activateGenSrcImage(true); });
         this.genSegImg?.addEventListener("click", (e) => { stopDomEvent(e); this.activateGenSrcImage(false); });
+        bindImageClipboardPaste(this.genGlobalImg, (file) => this.loadGenSrcImageFile(file, true));
+        bindImageClipboardPaste(this.genSegImg, (file) => this.loadGenSrcImageFile(file, false));
         this.genDefaultFc?.addEventListener("change", () => this.onGenDefaultFcChange());
         this.genSegFc?.addEventListener("change", () => this.onGenSegFcChange());
 
@@ -5162,28 +5190,33 @@ class H3_D_NEOEditor {
         const input = document.createElement("input");
         input.type = "file";
         input.accept = "image/*";
-        input.onchange = async () => {
+        input.onchange = () => {
             const file = input.files?.[0];
             if (!file) return;
-            try {
-                const uploaded = await uploadToInput(file);
-                const relPath = videoRelativePath(uploaded);
-                if (isGlobal) {
-                    this.timeline.global = this.timeline.global || { refs: [] };
-                    this.timeline.global.genImage = { imageFile: relPath };
-                } else {
-                    const seg = this.timeline.segments[this.selectedIndex];
-                    if (seg) {
-                        seg.genImage = { imageFile: relPath };
-                        seg.imageFile = relPath;
-                    }
-                }
-                this.commit();
-            } catch (err) {
-                console.error("[MiniMax H3Director] gen image upload failed:", err);
-            }
+            void this.loadGenSrcImageFile(file, isGlobal);
         };
         input.click();
+    }
+
+    async loadGenSrcImageFile(file, isGlobal) {
+        if (!file?.type?.startsWith("image/")) return;
+        try {
+            const uploaded = await uploadToInput(file);
+            const relPath = videoRelativePath(uploaded);
+            if (isGlobal) {
+                this.timeline.global = this.timeline.global || { refs: [] };
+                this.timeline.global.genImage = { imageFile: relPath };
+            } else {
+                const seg = this.timeline.segments[this.selectedIndex];
+                if (seg) {
+                    seg.genImage = { imageFile: relPath };
+                    seg.imageFile = relPath;
+                }
+            }
+            this.commit();
+        } catch (err) {
+            console.error("[MiniMax H3Director] gen image upload failed:", err);
+        }
     }
 
     onGenDefaultFcChange() {
@@ -6129,11 +6162,17 @@ class H3_D_NEOEditor {
         const show = masterOn && idx > 0 && !this.isImageBatch() && !this.isFl2vMode();
         wrap.classList.toggle("hidden", !show);
         wrap.hidden = !show;
+        this.segContinuityForcePrevWrap?.classList.toggle("hidden", !show);
+        if (this.segContinuityForcePrevWrap) this.segContinuityForcePrevWrap.hidden = !show;
         if (!show) return;
         const seg = this.timeline.segments?.[idx];
-        const canReferencePrevious = this.previousRunSegmentIndex(idx) != null;
-        cb.checked = canReferencePrevious && isSegmentContinuityFromPrev(seg, idx);
-        cb.disabled = !canReferencePrevious;
+        cb.checked = isSegmentContinuityFromPrev(seg, idx);
+        cb.disabled = false;
+        if (this.segContinuityForcePrevCb) {
+            this.segContinuityForcePrevCb.checked = cb.checked
+                && isSegmentContinuityForcePrevCache(seg, idx);
+            this.segContinuityForcePrevCb.disabled = !cb.checked;
+        }
         wrap.title = t("tooltip.segmentContinuityFromPrev");
     }
 
@@ -8651,9 +8690,13 @@ class H3_D_NEOEditor {
         if (!seg) return;
         const next = !isSegmentContinuityFromPrev(seg, rightIndex);
         seg.continuityFromPrev = next;
+        if (!next) seg.continuityForcePrevCache = false;
         if (this.isFl2vMode()) {
             const shot = this.timeline.shots?.[rightIndex];
-            if (shot) shot.continuityFromPrev = next;
+            if (shot) {
+                shot.continuityFromPrev = next;
+                if (!next) shot.continuityForcePrevCache = false;
+            }
         }
         this.commit(false, { syncTimeline: true });
         this.flushTimelineSync?.();
@@ -10620,6 +10663,7 @@ class H3_D_NEOEditor {
                     onReplace: () => this.pickRef(target, i, isGlobal),
                 }),
             });
+            bindImageClipboardPaste(el, (file) => this.addRefFromFile(file, target, i, isGlobal));
             box.appendChild(el);
         }
         restoreSlotLoadOverlays(this);

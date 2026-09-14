@@ -417,6 +417,7 @@ def _group_json(seg: dict) -> dict:
         "refAudios": seg.get("refAudios") or [],
         "refVideos": seg.get("refVideos") or [],
         "continuityFromPrev": seg.get("continuityFromPrev"),
+        "continuityForcePrevCache": seg.get("continuityForcePrevCache"),
         "refImageSize": seg.get("refImageSize"),
         "passMode": seg.get("passMode"),
     }

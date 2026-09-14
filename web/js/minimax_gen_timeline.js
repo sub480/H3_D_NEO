@@ -377,6 +377,18 @@ export function isSegmentContinuityFromPrev(segOrShot, index) {
     return false;
 }
 
+/** Force continuity to use the timeline-adjacent previous segment/cache. */
+export function isSegmentContinuityForcePrevCache(segOrShot, index) {
+    if (!(Number(index) > 0) || !segOrShot || typeof segOrShot !== "object") return false;
+    const raw = segOrShot.continuityForcePrevCache;
+    if (raw === true || raw === 1) return true;
+    if (typeof raw === "string") {
+        const s = raw.trim().toLowerCase();
+        return s === "true" || s === "1" || s === "yes" || s === "on";
+    }
+    return false;
+}
+
 export const REF_IMAGE_LONG_PRESETS = [1024, 1280, 1536];
 export const REF_IMAGE_SIZE_OPTIONS = ["match", ...REF_IMAGE_LONG_PRESETS.map(String), "max"];
 
@@ -478,6 +490,7 @@ export function newBatchSegment(overrides = {}) {
         previewB64: "",
         previewFrames: [],
         previewFps: 24,
+        continuityForcePrevCache: false,
         ...overrides,
         length: fc,
         frameCount: fc,

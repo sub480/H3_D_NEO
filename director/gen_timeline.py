@@ -559,7 +559,10 @@ def build_gen_director_plan(
                 [clip for clip in source_clips if int(clip.shape[0]) > 0]
             )
 
-    from .segment_continuity import resolve_segment_continuity_from_prev
+    from .segment_continuity import (
+        resolve_segment_continuity_force_prev_cache,
+        resolve_segment_continuity_from_prev,
+    )
 
     segments: list[SegmentPlan] = []
     for idx, (start, end, seg_data) in enumerate(segment_ranges):
@@ -730,6 +733,10 @@ def build_gen_director_plan(
                 source_audio_timeline=source_audio_timeline,
                 source_media_identity=source_media_identity,
                 continuity_from_prev=resolve_segment_continuity_from_prev(
+                    seg_data if isinstance(seg_data, dict) else {},
+                    segment_index=idx,
+                ),
+                continuity_force_prev_cache=resolve_segment_continuity_force_prev_cache(
                     seg_data if isinstance(seg_data, dict) else {},
                     segment_index=idx,
                 ),

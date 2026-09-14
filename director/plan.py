@@ -323,6 +323,8 @@ class SegmentPlan:
     ui_index: int | None = None
     # Per-segment「引用上段」; master「段间引导」must also be on. Default True.
     continuity_from_prev: bool = True
+    # Force the timeline-adjacent predecessor, loading its cache when unselected.
+    continuity_force_prev_cache: bool = False
     # Official MiniMaxH3ReferenceToVideo combo: match | max. Per r2v/rv2v group.
     ref_image_size: str = "match"
     # Per-segment 一采 / 二采. Default second (run both when Refine is connected).
@@ -424,6 +426,25 @@ class DirectorPlan:
     @property
     def segment_count(self) -> int:
         return len(self.segments)
+
+
+def continuity_predecessor_index(
+    plan: DirectorPlan,
+    seg: SegmentPlan,
+) -> int | None:
+    """Resolve the segment that supplies continuity for ``seg``."""
+    index = int(seg.index)
+    if index <= 0:
+        return None
+    if bool(getattr(seg, "continuity_force_prev_cache", False)):
+        return index - 1
+    run_indices = plan.run_indices
+    run_list = sorted(run_indices) if run_indices is not None else list(range(plan.segment_count))
+    try:
+        position = run_list.index(index)
+    except ValueError:
+        return None
+    return run_list[position - 1] if position > 0 else None
 
 
 def _ref_video_has_file(ref_block: dict | None) -> bool:
@@ -1017,6 +1038,7 @@ def build_director_plan(
         resolve_continuity_mode,
         resolve_continuity_redraw,
         resolve_continuity_settings,
+        resolve_segment_continuity_force_prev_cache,
         resolve_segment_continuity_from_prev,
     )
 
@@ -1025,6 +1047,10 @@ def build_director_plan(
     )
     for seg, (_start, _end, seg_data) in zip(segments, segment_ranges):
         seg.continuity_from_prev = resolve_segment_continuity_from_prev(
+            seg_data if isinstance(seg_data, dict) else {},
+            segment_index=seg.index,
+        )
+        seg.continuity_force_prev_cache = resolve_segment_continuity_force_prev_cache(
             seg_data if isinstance(seg_data, dict) else {},
             segment_index=seg.index,
         )
@@ -1182,6 +1208,18 @@ def plan_summary(plan: DirectorPlan) -> str:
         )
         if pinned:
             lines.append("  Pin from prev: #" + ", #".join(str(i) for i in pinned))
+        forced = [
+            seg.index + 1
+            for seg in plan.segments
+            if seg.index > 0
+            and getattr(seg, "continuity_from_prev", True)
+            and getattr(seg, "continuity_force_prev_cache", False)
+        ]
+        if forced:
+            lines.append(
+                "  Force adjacent prev/cache: #"
+                + ", #".join(str(i) for i in forced)
+            )
         if skipped_pin:
             lines.append(
                 "  Hard cut (per-segment off): #"
@@ -1198,7 +1236,11 @@ def plan_summary(plan: DirectorPlan) -> str:
         pin_note = ""
         if plan.continuity_enabled and seg.index > 0:
             pin_note = (
-                " — pin←prev"
+                (
+                    " — pin←adjacent prev/cache"
+                    if getattr(seg, "continuity_force_prev_cache", False)
+                    else " — pin←prev"
+                )
                 if getattr(seg, "continuity_from_prev", True)
                 else " — hard cut"
             )

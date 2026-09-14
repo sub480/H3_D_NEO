@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 from typing import Any
 
 import torch
@@ -197,6 +198,17 @@ def resolve_segment_continuity_from_prev(
     else:
         return True
     return _truthy_continuity_flag(raw)
+
+
+def resolve_segment_continuity_force_prev_cache(
+    seg_data: dict | None,
+    *,
+    segment_index: int,
+) -> bool:
+    """Per-segment force flag for the timeline-adjacent predecessor cache."""
+    if int(segment_index) <= 0 or not isinstance(seg_data, dict):
+        return False
+    return _truthy_continuity_flag(seg_data.get("continuityForcePrevCache"))
 
 
 def timeline_row_for_index(timeline: dict | None, index: int) -> dict:
@@ -631,6 +643,41 @@ def _blur_hwc(frame: torch.Tensor, kernel: int) -> torch.Tensor:
     return t.squeeze(0).permute(1, 2, 0)
 
 
+def _grade_device() -> torch.device:
+    forced = os.environ.get("H3_DIRECTOR_GRADE_DEVICE", "").strip().lower()
+    if forced in {"cpu", "off", "0"}:
+        return torch.device("cpu")
+    try:
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+    except Exception:
+        pass
+    return torch.device("cpu")
+
+
+def _box_blur_bhwc(
+    frames: torch.Tensor, kernel: int, device: torch.device
+) -> torch.Tensor:
+    """Batch box-blur BHWC frames using the same reflect padding."""
+    size = int(kernel)
+    if size < 3:
+        return frames.detach().to(device=device, dtype=torch.float32)
+    if size % 2 == 0:
+        size += 1
+    batch = frames.detach().to(device=device, dtype=torch.float32)
+    if batch.dim() == 3:
+        batch = batch.unsqueeze(0)
+    channels_first = batch.permute(0, 3, 1, 2)
+    pad = size // 2
+    channels_first = torch.nn.functional.pad(
+        channels_first, (pad, pad, pad, pad), mode="reflect"
+    )
+    channels_first = torch.nn.functional.avg_pool2d(
+        channels_first, kernel_size=size, stride=1
+    )
+    return channels_first.permute(0, 2, 3, 1)
+
+
 def _lowfreq_appearance_pull(
     src: torch.Tensor,
     guide: torch.Tensor,
@@ -657,6 +704,45 @@ def _lowfreq_appearance_pull(
     return out.clamp(0.0, 1.0).to(dtype=src.dtype)
 
 
+def _grade_pull_cpu(
+    out: torch.Tensor,
+    guide: torch.Tensor,
+    weights: list,
+    blur: int,
+) -> None:
+    for index, weight in enumerate(weights):
+        out[index] = _lowfreq_appearance_pull(
+            out[index], guide, weight=weight, blur=blur
+        )
+
+
+def _grade_pull_batched(
+    out: torch.Tensor,
+    guide: torch.Tensor,
+    weights: list,
+    blur: int,
+) -> None:
+    count = len(weights)
+    device = _grade_device()
+    source = out[:count]
+    if guide.dim() == 4:
+        guide = guide[0]
+    if tuple(guide.shape[:2]) != tuple(source.shape[1:3]):
+        guide = fit_canvas(
+            guide.unsqueeze(0), int(source.shape[2]), int(source.shape[1])
+        )[0]
+    blurred_guide = _box_blur_bhwc(guide.unsqueeze(0), blur, device)[0]
+    blurred_source = _box_blur_bhwc(source, blur, device)
+    weight_tensor = torch.tensor(
+        weights, device=device, dtype=torch.float32
+    ).view(-1, 1, 1, 1)
+    source_float = source.detach().to(device=device, dtype=torch.float32)
+    result = (source_float + weight_tensor * (
+        blurred_guide.unsqueeze(0) - blurred_source
+    )).clamp_(0.0, 1.0)
+    out[:count] = result.to(device=out.device, dtype=out.dtype)
+
+
 def match_export_opening_grade(
     body: torch.Tensor,
     guide: torch.Tensor,
@@ -678,14 +764,25 @@ def match_export_opening_grade(
         return body
     count = min(int(frames), int(body.shape[0]))
     previous_last = guide[-1]
-    out = body.clone()
+    weights: list = []
     for index in range(count):
         weight = float(weight0) * (1.0 - float(index) / float(count))
         if weight <= 1e-4:
             break
-        out[index] = _lowfreq_appearance_pull(
-            out[index], previous_last, weight=weight, blur=int(blur)
-        )
+        weights.append(weight)
+
+    out = body.clone()
+    if weights:
+        try:
+            _grade_pull_batched(out, previous_last, weights, int(blur))
+        except Exception as exc:
+            log.warning(
+                "Segment continuity: export opening grade fell back to CPU "
+                "(%s: %s)",
+                type(exc).__name__,
+                exc,
+            )
+            _grade_pull_cpu(out, previous_last, weights, int(blur))
     log.info(
         "Segment continuity: export opening grade %df weight=%.2f blur=%d",
         count,

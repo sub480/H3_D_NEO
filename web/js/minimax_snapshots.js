@@ -343,19 +343,6 @@ export function bindSnapshotActions(editor) {
         close.focus();
     });
     const alertError = (error) => alertInView(String(error?.message || error));
-    const confirmInView = (message) => new Promise((resolve) => {
-        const bar = document.createElement("div");
-        bar.className = "bd-snapshot-confirm";
-        bar.textContent = message;
-        const cancel = document.createElement("button");
-        cancel.className = "bd-btn"; cancel.textContent = t("dialog.cancel");
-        const confirm = document.createElement("button");
-        confirm.className = "bd-btn bd-btn-danger"; confirm.textContent = t("dialog.confirm");
-        const finish = (value) => { bar.remove(); resolve(value); };
-        cancel.onclick = () => finish(false); confirm.onclick = () => finish(true);
-        bar.append(cancel, confirm);
-        modal.querySelector(".bd-snapshot-actions").before(bar);
-    });
     const setBusy = (value) => { busy = value; buttons.forEach((button) => { if (button.dataset.snap !== "close") button.disabled = value; }); };
     const downloadSnapshot = async (snapshot) => {
         const response = await api.fetchApi(`/minimax/director/snapshots/export?id=${encodeURIComponent(snapshot.id)}`);
@@ -502,11 +489,11 @@ export function bindSnapshotActions(editor) {
         const result = await request("/minimax/director/snapshots/duplicate", { id: snapshot.id, name }); selected = result.id;
     });
     modal.querySelector('[data-snap="remove"]').onclick = () => operation(async () => {
-        const snapshot = selectedSnapshot(); if (!snapshot || !await confirmInView(t("snapshot.removeConfirm", { name: snapshot.name }))) return;
+        const snapshot = selectedSnapshot(); if (!snapshot) return;
         await request("/minimax/director/snapshots/delete", { id: snapshot.id }); selected = null;
     });
     modal.querySelector('[data-snap="restore"]').onclick = () => operation(async () => {
-        const snapshot = selectedSnapshot(); if (!snapshot || !await confirmInView(t("snapshot.restoreConfirm", { name: snapshot.name }))) return;
+        const snapshot = selectedSnapshot(); if (!snapshot) return;
         const data = await request("/minimax/director/snapshots/restore", { id: snapshot.id });
         if (!data?.timeline) throw new Error(t("snapshot.restoreError"));
         close();

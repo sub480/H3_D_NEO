@@ -10,6 +10,36 @@ import {
     refVideoLabel,
 } from "./minimax_gen_timeline.js";
 
+let activeClipboardImageTarget = null;
+let clipboardPasteBound = false;
+
+function clipboardImageFile(event) {
+    const items = [...(event.clipboardData?.items || [])];
+    const item = items.find((entry) => entry.kind === "file" && entry.type.startsWith("image/"));
+    if (item) return item.getAsFile();
+    return [...(event.clipboardData?.files || [])].find((file) => file.type.startsWith("image/")) || null;
+}
+
+export function bindImageClipboardPaste(el, onFile) {
+    if (!el || typeof onFile !== "function") return;
+    const target = { el, onFile };
+    const activate = () => { activeClipboardImageTarget = target; };
+    el.addEventListener("pointerenter", activate);
+    el.addEventListener("focusin", activate);
+    el.addEventListener("pointerdown", activate, true);
+    if (clipboardPasteBound) return;
+    clipboardPasteBound = true;
+    document.addEventListener("paste", (event) => {
+        const active = activeClipboardImageTarget;
+        if (!active?.el?.isConnected) return;
+        const file = clipboardImageFile(event);
+        if (!file) return;
+        event.preventDefault();
+        event.stopPropagation();
+        void active.onFile(file);
+    }, true);
+}
+
 export const SLOT_DND_MIME = "application/x-minimax-media-slot";
 
 export const SLOT_UI_STYLES = `
