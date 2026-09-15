@@ -203,6 +203,7 @@ def director_prompt_to_timeline(
             "continuityFromPrev": bool(group.get("continuityFromPrev", index > 0)),
             "continuityForcePrevCache": bool(group.get("continuityForcePrevCache", False)),
             "passMode": "first" if group.get("passMode") == "first" else "second",
+            "forceResample": bool(group.get("forceResample", False)),
             "uiGroupName": _group_ui_name(group.get("name")),
         }
         for key in _MEDIA_KEYS:

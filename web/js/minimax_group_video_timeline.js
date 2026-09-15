@@ -186,7 +186,7 @@ function button(label, title = label) {
 
 export function mountGroupVideoTimeline(container, options) {
     injectStyles();
-    const { editor, seg, onUpload, onDropFile, onRangeChange } = options;
+    const { editor, seg, onUpload, onDropFile, onRangeChange, onRangePreview } = options;
     const model = sourceModel(seg);
     const logicalRanges = clipLogicalRanges(model);
     const videoLabel = t("slot.video", { n: 1 });
@@ -575,6 +575,8 @@ export function mountGroupVideoTimeline(container, options) {
         }
         syncSelection();
         syncPlayer();
+        const previewEnd = alignedRangeEnd(rangeStart, rangeEnd);
+        onRangePreview?.(rangeStart, previewEnd);
     };
     const startRangeDrag = (kind, event) => {
         if (!model.totalFrames || event.button !== 0) return;

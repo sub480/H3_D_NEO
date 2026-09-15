@@ -2401,6 +2401,7 @@ class H3_D_NEOEditor {
                 continuityFromPrev: isSegmentContinuityFromPrev(segment, index),
                 continuityForcePrevCache: isSegmentContinuityForcePrevCache(segment, index),
                 passMode: resolveSegmentPassMode(segment),
+                forceResample: !!segment.forceResample,
             };
         });
         const output = timeline.output || {};
@@ -2826,10 +2827,12 @@ class H3_D_NEOEditor {
                     startImage: clean.startImage || null,
                     endImage: clean.endImage || null,
                     sourceVideo: clean.sourceVideo,
+                    videoResolution: clean.videoResolution === "source" ? "source" : "target",
                     continuityFromPrev: isSegmentContinuityFromPrev(clean, index),
                     continuityForcePrevCache: isSegmentContinuityForcePrevCache(clean, index),
                     refImageSize: resolveSegmentRefImageSize(clean, this.timeline.output),
                     passMode: resolveSegmentPassMode(clean),
+                    forceResample: !!clean.forceResample,
                     seedMode: clean.seedMode || "inherit",
                     seed: String(clean.seed || "0"),
                     uiCardHeight: Number.isFinite(Number(clean.uiCardHeight))
@@ -12782,6 +12785,7 @@ app.registerExtension({
 
         const onSerialize = nodeType.prototype.onSerialize;
         nodeType.prototype.onSerialize = function (info) {
+            this._minimaxEditor?.flushTimelineSync?.();
             const out = onSerialize?.apply(this, arguments);
             if (info && typeof info === "object") {
                 const named = {};

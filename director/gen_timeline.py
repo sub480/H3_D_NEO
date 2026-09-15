@@ -137,7 +137,7 @@ def _gen_segment_ranges(
                     aligned_count,
                     selected_count - aligned_count,
                 )
-            fc = aligned_count
+            fc = max(fc, aligned_count)
         ranges.append((start, start + fc, raw))
         start += fc
     if not ranges:
@@ -715,6 +715,14 @@ def build_gen_director_plan(
             seg_source = None
         else:
             seg_source = source_clips[idx].clone() if idx < len(source_clips) else None
+        use_source_resolution = seg_task_key in {"v2v", "rv2v"} and (
+            str(seg_data.get("videoResolution") or "target") == "source"
+        )
+        source_range = (
+            _mixed_source_range(seg_data)
+            if seg_task_key in {"v2v", "rv2v"}
+            else None
+        )
 
         segments.append(
             SegmentPlan(
@@ -730,6 +738,8 @@ def build_gen_director_plan(
                 ref_videos=seg_ref_videos,
                 negative_prompt=seg_negative,
                 source_clip=seg_source,
+                source_frame_count=source_range[2] if source_range is not None else 0,
+                use_source_resolution=use_source_resolution,
                 source_audio_timeline=source_audio_timeline,
                 source_media_identity=source_media_identity,
                 continuity_from_prev=resolve_segment_continuity_from_prev(
@@ -746,6 +756,10 @@ def build_gen_director_plan(
                 ),
                 pass_mode=resolve_segment_pass_mode(
                     seg_data if isinstance(seg_data, dict) else {},
+                ),
+                force_resample=bool(
+                    (seg_data or {}).get("forceResample", False)
+                    if isinstance(seg_data, dict) else False
                 ),
                 seed_mode=seg_seed_mode,
                 seed=seg_seed,

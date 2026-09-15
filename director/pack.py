@@ -420,6 +420,7 @@ def _group_json(seg: dict) -> dict:
         "continuityForcePrevCache": seg.get("continuityForcePrevCache"),
         "refImageSize": seg.get("refImageSize"),
         "passMode": seg.get("passMode"),
+        "forceResample": seg.get("forceResample"),
     }
     if isinstance(seg.get("genImage"), dict):
         out["genImage"] = {

@@ -531,7 +531,13 @@ def execute_director_plan_core(
         # A normal one-pass cache hit only needs the AV latent.  The encoded
         # pixel frames are required for refine output or live preview; loading
         # them unconditionally adds a large CPU/disk copy to every segment.
-        pre_cache = load_first_pass_cache(
+        # When a second pass is requested, the separate first-pass phase has
+        # already consumed the force flag and written the fresh cache. Do not
+        # sample that first pass a second time in the refine phase.
+        force_first_sample = bool(seg.force_resample) and (
+            _first_pass_phase or pass_mode == "first"
+        )
+        pre_cache = None if force_first_sample else load_first_pass_cache(
             node_id,
             seg,
             plan,
@@ -571,7 +577,9 @@ def execute_director_plan_core(
             body_raw = raw_clip[:target_len] if int(raw_clip.shape[0]) > target_len else raw_clip
 
         if body_raw is not None and body_raw.shape[0] > 0:
-            if plan.output_mode == "fixed":
+            if seg.use_source_resolution:
+                clip_frames = body_raw
+            elif plan.output_mode == "fixed":
                 clip_frames = fit_canvas(body_raw, plan.width, plan.height)
             else:
                 # long_edge may leave storage-sized frames (e.g. 496) that are not
@@ -587,7 +595,13 @@ def execute_director_plan_core(
 
         num_frames = minimax_align_frame_count(target_len)
         if clip_frames is not None:
-            clip_frames, _ = prepare_segment_clip(clip_frames, num_frames)
+            clip_frames, _ = prepare_segment_clip(
+                clip_frames,
+                num_frames,
+                pad_last_frame=seg.task_key in {"v2v", "rv2v"} and (
+                    int(clip_frames.shape[0]) < num_frames
+                ),
+            )
 
         # ── Continuity gate ─────────────────────────────────────────────
         # OFF → official MiniMax H3 path only (no prev load / pin / patch).
@@ -966,9 +980,16 @@ def execute_director_plan_core(
             phase="context_encode", phase_value=1, phase_max=1, **meta,
         )
 
-        # Single / last segment: skip — official H3 also keeps models loaded.
+        # Release temporary conditioning allocations without forcing every
+        # segment's 20–25 GB model patchers out of ComfyUI's model cache.
+        # load_models_gpu will still evict/offload models when VRAM actually
+        # requires it; an exception below retains the full-unload fallback.
         if clear_vram_between_segments and seg_total > 1:
-            cleanup_segment_vram(enabled=True, unload_models=True)
+            cleanup_segment_vram(
+                enabled=True,
+                unload_models=False,
+                reason="before sampling",
+            )
 
         def _report_sample_phase(phase: str, value: float) -> None:
             report_director_progress(
@@ -1354,9 +1375,6 @@ def execute_director_plan_core(
             except Exception as exc:
                 log.debug("Segment video preview skipped: %s", exc)
 
-        if clear_vram_between_segments and progress_index < seg_total - 1:
-            cleanup_segment_vram(enabled=True)
-
         log.info(
             "MiniMax H3 Director segment %d/%d done (%d frames, task=%s)",
             ui_idx + 1, timeline_seg_total, target_len, seg.task_key,
@@ -1390,8 +1408,6 @@ def execute_director_plan_core(
                         segment_pre_refine=segment_pre_refine,
                         progress_pos=progress_pos,
                     )
-        if clear_vram_between_segments and segment_outputs:
-            cleanup_segment_vram(enabled=True)
         try:
             chunk, audio_dict, pre_chunk = _run_one_segment(
                 seg, progress_index=progress_pos[seg.index]
@@ -1400,6 +1416,7 @@ def execute_director_plan_core(
             cleanup_segment_vram(
                 enabled=clear_vram_between_segments,
                 unload_models=True,
+                reason="segment error",
             )
             raise
         finally:
@@ -1505,7 +1522,11 @@ def execute_director_plan_core(
         )
     shift_cache.clear()
     if clear_vram_between_segments:
-        cleanup_segment_vram(enabled=True, unload_models=False)
+        cleanup_segment_vram(
+            enabled=True,
+            unload_models=False,
+            reason="plan complete",
+        )
     return (
         combined,
         segment_outputs,

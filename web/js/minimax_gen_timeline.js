@@ -491,6 +491,7 @@ export function newBatchSegment(overrides = {}) {
         previewFrames: [],
         previewFps: 24,
         continuityForcePrevCache: false,
+        forceResample: false,
         ...overrides,
         length: fc,
         frameCount: fc,

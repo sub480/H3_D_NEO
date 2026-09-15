@@ -198,17 +198,31 @@ function resolveSegmentDurationSec(seg) {
     return defaultDurationSec(resolveTaskKey(seg.taskType || ""));
 }
 
-/** Apply seconds to a segment by index (avoids stale closures after normalize). */
-function applyBatchSegmentDuration(editor, index, rawSec) {
-    const taskKey = resolveTaskKey(editor.getTaskKey?.() || editor.taskTypeWidget?.value);
-    const seg = editor.timeline.segments?.[index];
-    if (!seg || !isVideoBatchTask(taskKey)) return null;
+function resolveVideoSegmentDuration(taskKey, seg, rawSec = resolveSegmentDurationSec(seg)) {
+    const segTaskKey = taskKey === "mixed" ? resolveMixedGroupKey(seg) : taskKey;
+    const sourceFrames = ["v2v", "rv2v"].includes(segTaskKey)
+        ? sourceVideoFrameMap(seg.sourceVideo).length
+        : 0;
     const clamped = clamp(
         Number(rawSec) || defaultDurationSec(taskKey),
         minDurationSec(),
         maxDurationSec(),
     );
-    const { frames, durationSec } = durationToClampedMiniMaxFrames(clamped, 24);
+    const requested = durationToClampedMiniMaxFrames(clamped, 24);
+    const frames = Math.max(sourceFrames, requested.frames);
+    return {
+        frames,
+        durationSec: preferredDurationSecFromFrames(frames, 24),
+        sourceFrames,
+    };
+}
+
+/** Apply seconds to a segment by index (avoids stale closures after normalize). */
+function applyBatchSegmentDuration(editor, index, rawSec) {
+    const taskKey = resolveTaskKey(editor.getTaskKey?.() || editor.taskTypeWidget?.value);
+    const seg = editor.timeline.segments?.[index];
+    if (!seg || !isVideoBatchTask(taskKey)) return null;
+    const { frames, durationSec } = resolveVideoSegmentDuration(taskKey, seg, rawSec);
     seg.durationSec = durationSec;
     seg.frameCount = frames;
     seg.length = frames;
@@ -448,6 +462,8 @@ export const IMAGE_BATCH_STYLES = `
 .bd-batch-fc{display:flex;align-items:center;gap:6px;color:#aaa;font-size:12px}
 .bd-batch-fc input{width:72px;background:#181818;border:1px solid #444;border-radius:5px;color:#eee;padding:5px 8px;font-size:13px}
 .bd-batch-pass{display:inline-flex;align-items:center;gap:4px;flex-shrink:0}
+.bd-batch-force-resample{display:inline-flex;align-items:center;gap:3px;color:#aaa;font-size:10px;white-space:nowrap;cursor:pointer}
+.bd-batch-force-resample input{width:12px;height:12px;margin:0;accent-color:#4fff8f;cursor:pointer}
 .bd-batch-pass-btn{background:#181818;border:1px solid #444;color:#ccc;border-radius:5px;padding:3px 7px;font-size:11px;cursor:pointer;line-height:1.2}
 .bd-batch-pass-btn.active{border-color:#4fff8f;color:#4fff8f;background:#163022}
 .bd-batch-pass-btn:disabled{opacity:.4;cursor:not-allowed}
@@ -792,13 +808,7 @@ export function ensureImageBatchTimeline(editor) {
     migrateGlobalRefsIntoBatchSegments(editor, taskKey);
     for (const seg of editor.timeline.segments) {
         if (isVideoBatchTask(taskKey)) {
-            const segTaskKey = taskKey === "mixed" ? resolveMixedGroupKey(seg) : taskKey;
-            const sourceFrames = ["v2v", "rv2v"].includes(segTaskKey)
-                ? sourceVideoFrameMap(seg.sourceVideo).length
-                : 0;
-            const { frames, durationSec } = sourceFrames > 0
-                ? { frames: sourceFrames, durationSec: framesToDurationSec(sourceFrames, 24) }
-                : durationToClampedMiniMaxFrames(resolveSegmentDurationSec(seg), 24);
+            const { frames, durationSec } = resolveVideoSegmentDuration(taskKey, seg);
             seg.durationSec = durationSec;
             seg.frameCount = frames;
             seg.length = frames;
@@ -846,16 +856,7 @@ export function normalizeImageBatchSegments(editor) {
         let fc = 1;
         let durationSec;
         if (isVideo) {
-            const segTaskKey = taskKey === "mixed" ? resolveMixedGroupKey(seg) : taskKey;
-            const sourceFrames = ["v2v", "rv2v"].includes(segTaskKey)
-                ? sourceVideoFrameMap(seg.sourceVideo).length
-                : 0;
-            const resolved = sourceFrames > 0
-                ? { frames: sourceFrames, durationSec: framesToDurationSec(sourceFrames, 24) }
-                : durationToClampedMiniMaxFrames(
-                    clamp(resolveSegmentDurationSec(seg) || defSec, minDurationSec(), maxDurationSec()),
-                    24,
-                );
+            const resolved = resolveVideoSegmentDuration(taskKey, seg, resolveSegmentDurationSec(seg) || defSec);
             fc = resolved.frames;
             durationSec = resolved.durationSec;
             seg.durationSec = durationSec;
@@ -1147,6 +1148,7 @@ function appendSourceVideoResolutionControl(container, editor, seg, { showTitle 
     select.onchange = () => {
         seg.videoResolution = select.value === "source" ? "source" : "target";
         editor.commit(false, { syncTimeline: true });
+        editor.flushTimelineSync?.();
     };
     const hasVideo = sourceVideoFrameMap(seg.sourceVideo).length > 0;
     const restoreButton = document.createElement("button");
@@ -1183,6 +1185,20 @@ function appendSourceVideoResolutionControl(container, editor, seg, { showTitle 
     }
 }
 
+function syncSourceRangeDurationInput(editor, seg, index, frameCount) {
+    const durationSec = preferredDurationSecFromFrames(frameCount, 24);
+    const playSec = framesToDurationSec(frameCount, 24);
+    for (const input of editor.batchList?.querySelectorAll("input[data-batch-sec-index]") || []) {
+        const sameId = seg.id && input.getAttribute("data-batch-seg-id") === String(seg.id);
+        const sameIndex = Number(input.getAttribute("data-batch-sec-index")) === index;
+        if (!sameId && !sameIndex) continue;
+        input.value = String(durationSec);
+        input.min = String(durationSec);
+        input.title = t("batch.videoEditDurationTooltip", { frames: frameCount, play: playSec });
+        break;
+    }
+}
+
 function mountSegSourceVideoTimeline(container, editor, seg, index, { showHeader = true } = {}) {
     if (showHeader) appendSourceVideoResolutionControl(container, editor, seg);
     mountGroupVideoTimeline(container, {
@@ -1191,6 +1207,9 @@ function mountSegSourceVideoTimeline(container, editor, seg, index, { showHeader
         onUpload: () => uploadSegSourceVideo(editor, index),
         onDropFile: (file) => {
             if (isBatchVideoFile(file)) void assignSegSourceVideoFromFile(editor, index, file);
+        },
+        onRangePreview: (start, end) => {
+            syncSourceRangeDurationInput(editor, seg, index, Math.max(0, end - start));
         },
         onRangeChange: (start, end) => {
             const source = seg.sourceVideo;
@@ -1204,6 +1223,7 @@ function mountSegSourceVideoTimeline(container, editor, seg, index, { showHeader
             seg._videoFrameCount = frameCount;
             seg.previewB64 = "";
             seg.previewFrames = [];
+            syncSourceRangeDurationInput(editor, seg, index, frameCount);
             editor.commit(false, { syncTimeline: true });
             editor.updateVideoNameLabel?.();
             editor.scheduleRender?.();
@@ -3093,6 +3113,14 @@ function commitSegmentPassMode(editor, index, mode) {
     editor.flushTimelineSync?.();
 }
 
+function commitSegmentForceResample(editor, index, checked) {
+    const live = editor?.timeline?.segments?.[index];
+    if (!live) return;
+    live.forceResample = !!checked;
+    editor.commit?.(false, { syncTimeline: true });
+    editor.flushTimelineSync?.();
+}
+
 async function clearGroupFirstPassCache(editor, index) {
     const node = editor?.node;
     if (!node) return;
@@ -3141,6 +3169,20 @@ function appendBatchPassControls(meta, editor, seg, index) {
     wrap.className = "bd-batch-pass";
     wrap.setAttribute("data-pass-mode", resolveSegmentPassMode(seg));
     wrap.onclick = (e) => e.stopPropagation();
+    const forceLabel = document.createElement("label");
+    forceLabel.className = "bd-batch-force-resample";
+    forceLabel.title = t("batch.pass.tooltip.forceResample");
+    const forceInput = document.createElement("input");
+    forceInput.type = "checkbox";
+    forceInput.checked = !!seg.forceResample;
+    forceInput.setAttribute("data-batch-force-resample", "");
+    forceInput.onchange = (e) => {
+        e.stopPropagation();
+        commitSegmentForceResample(editor, index, forceInput.checked);
+    };
+    const forceText = document.createElement("span");
+    forceText.textContent = t("batch.pass.forceResample");
+    forceLabel.append(forceInput, forceText);
     const firstBtn = document.createElement("button");
     firstBtn.type = "button";
     firstBtn.className = "bd-batch-pass-btn";
@@ -3190,7 +3232,7 @@ function appendBatchPassControls(meta, editor, seg, index) {
         e.stopPropagation();
         void clearGroupFirstPassCache(editor, index);
     };
-    wrap.append(firstBtn, secondBtn, status, clearBtn);
+    wrap.append(forceLabel, firstBtn, secondBtn, status, clearBtn);
     meta.appendChild(wrap);
 }
 
@@ -3547,20 +3589,21 @@ function appendBatchCard(list, editor, seg, index, ctx) {
         if (isVideo) {
             const secRow = document.createElement("label");
             secRow.className = "bd-batch-fc";
-            const sourceFrames = isVideoEdit ? sourceVideoFrameMap(seg.sourceVideo).length : 0;
-            const curSec = isVideoEdit && sourceFrames > 0
-                ? framesToDurationSec(sourceFrames, 24)
-                : resolveSegmentDurationSec(seg);
-            const { frames, durationSec: syncedSec } = isVideoEdit && sourceFrames > 0
-                ? { frames: sourceFrames, durationSec: curSec }
-                : durationToClampedMiniMaxFrames(curSec, 24);
+            const { frames, durationSec: syncedSec, sourceFrames } = resolveVideoSegmentDuration(key, seg);
             const playSec = framesToDurationSec(frames, 24);
             seg.durationSec = syncedSec;
             seg.frameCount = frames;
             seg.length = frames;
             seg._videoFrameCount = frames;
             const displayedSec = isVideoEdit && sourceFrames <= 0 ? 0 : seg.durationSec;
-            secRow.innerHTML = `${t("batch.seconds")} <input type="number" data-batch-sec-index="${index}" data-batch-seg-id="${seg.id || ""}" min="0" max="${maxDurationSec()}" step="0.1" value="${displayedSec}" title="${t("batch.durationTooltip", { frames, play: playSec })}">`;
+            const minSec = isVideoEdit && sourceFrames > 0
+                ? preferredDurationSecFromFrames(sourceFrames, 24)
+                : minDurationSec();
+            const durationTitle = t(
+                isVideoEdit ? "batch.videoEditDurationTooltip" : "batch.durationTooltip",
+                { frames, play: playSec },
+            );
+            secRow.innerHTML = `${t("batch.seconds")} <input type="number" data-batch-sec-index="${index}" data-batch-seg-id="${seg.id || ""}" min="${minSec}" max="${maxDurationSec()}" step="0.1" value="${displayedSec}" title="${durationTitle}">`;
             const secInput = secRow.querySelector("input");
             // Do not rewrite value/title while focused: frame snapping would
             // bounce 20.7↔20.5 and interrupt typing. Normalize on blur.
@@ -3586,10 +3629,7 @@ function appendBatchCard(list, editor, seg, index, ctx) {
                     editor.totalFramesWidget.value = sumFrameCounts(editor.timeline.segments);
                 }
             };
-            if (isVideoEdit) {
-                secInput.readOnly = true;
-                secInput.title = t("batch.durationTooltip", { frames: sourceFrames, play: displayedSec });
-            } else if (externalLocked) {
+            if (externalLocked) {
                 secInput.readOnly = true;
                 secInput.disabled = true;
                 secInput.title = t("external.durationLocked");

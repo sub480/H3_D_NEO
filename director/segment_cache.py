@@ -190,6 +190,12 @@ def _segment_identity_fingerprint(seg: SegmentPlan, plan: DirectorPlan) -> dict[
     else:
         continuity_pipeline = CONTINUITY_PIPELINE_ID
         continuity_redraw = 0
+    source_clip = getattr(seg, "source_clip", None)
+    source_canvas = (
+        [int(source_clip.shape[2]), int(source_clip.shape[1])]
+        if source_clip is not None and source_clip.ndim >= 3
+        else None
+    )
     payload = {
         "index": seg.index,
         "start": seg.start_frame,
@@ -223,6 +229,13 @@ def _segment_identity_fingerprint(seg: SegmentPlan, plan: DirectorPlan) -> dict[
         "continuity_redraw": continuity_redraw,
         "continuity_pipeline": continuity_pipeline,
     }
+    if bool(getattr(seg, "use_source_resolution", False)):
+        payload["use_source_resolution"] = True
+        payload["source_canvas"] = source_canvas
+    source_frame_count = int(getattr(seg, "source_frame_count", 0) or 0)
+    if seg.task_key in {"v2v", "rv2v"} and seg.frame_count > source_frame_count > 0:
+        payload["video_edit_padding"] = "hold_last_v1"
+        payload["source_frame_count"] = source_frame_count
     if uses_mc:
         payload["continuity_keep_tail"] = bool(
             getattr(plan, "continuity_keep_tail", False)

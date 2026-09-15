@@ -316,6 +316,8 @@ class SegmentPlan:
     reference_video_start_frame: int = 0
     negative_prompt: str = ""
     source_clip: torch.Tensor | None = None
+    source_frame_count: int = 0
+    use_source_resolution: bool = False
     source_audio_timeline: dict | None = None
     source_media_identity: tuple[str, ...] = ()
     # When external groups filter by「选择运行」, plan.index is the compact run
@@ -329,6 +331,8 @@ class SegmentPlan:
     ref_image_size: str = "match"
     # Per-segment 一采 / 二采. Default second (run both when Refine is connected).
     pass_mode: str = PASS_MODE_SECOND
+    # Skip the first-pass cache lookup and always sample this segment again.
+    force_resample: bool = False
     # Per-segment first-pass seed. inherit uses Director's sampling seed.
     seed_mode: str = "inherit"
     seed: int = 0
@@ -1098,12 +1102,16 @@ def slice_video_frames(source: torch.Tensor, start: int, end: int) -> torch.Tens
     return source[start:end].clone()
 
 
-def prepare_segment_clip(clip: torch.Tensor, target_frames: int) -> tuple[torch.Tensor, int]:
-    """Trim source toward MiniMax 17k+5 length. Do **not** pad with last-frame copies.
+def prepare_segment_clip(
+    clip: torch.Tensor,
+    target_frames: int,
+    *,
+    pad_last_frame: bool = False,
+) -> tuple[torch.Tensor, int]:
+    """Trim source toward MiniMax 17k+5 length, optionally holding its last frame.
 
-    Fabricating freeze frames in the source makes Bernini/Wan reproduce visible
-    stutter / duplicate frames. Official BerniniConditioning simply encodes
-    ``source[:length]`` even when the clip is shorter than ``length``.
+    Last-frame padding is reserved for an explicit v2v/rv2v duration extension.
+    Other tasks keep the official behavior of encoding a shorter source as-is.
     """
     actual = clip.shape[0]
     if actual <= 0:
@@ -1111,6 +1119,9 @@ def prepare_segment_clip(clip: torch.Tensor, target_frames: int) -> tuple[torch.
     num_frames = minimax_align_frame_count(max(actual, target_frames))
     if actual > num_frames:
         clip = clip[:num_frames]
+    elif pad_last_frame and actual < num_frames:
+        tail = clip[-1:].expand(num_frames - actual, *clip.shape[1:])
+        clip = torch.cat((clip, tail), dim=0)
     return clip, num_frames
 
 
