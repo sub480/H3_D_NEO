@@ -200,8 +200,9 @@ function resolveSegmentDurationSec(seg) {
 
 function resolveVideoSegmentDuration(taskKey, seg, rawSec = resolveSegmentDurationSec(seg)) {
     const segTaskKey = taskKey === "mixed" ? resolveMixedGroupKey(seg) : taskKey;
+    const heldImage = seg.sourceVideo?.mediaKind === "image";
     const sourceFrames = ["v2v", "rv2v"].includes(segTaskKey)
-        ? sourceVideoFrameMap(seg.sourceVideo).length
+        ? (heldImage ? 0 : sourceVideoFrameMap(seg.sourceVideo).length)
         : 0;
     const clamped = clamp(
         Number(rawSec) || defaultDurationSec(taskKey),
@@ -210,6 +211,11 @@ function resolveVideoSegmentDuration(taskKey, seg, rawSec = resolveSegmentDurati
     );
     const requested = durationToClampedMiniMaxFrames(clamped, 24);
     const frames = Math.max(sourceFrames, requested.frames);
+    if (heldImage) {
+        seg.sourceVideo.totalFrames = frames;
+        seg.sourceVideo.rangeStart = 0;
+        seg.sourceVideo.rangeEnd = frames;
+    }
     return {
         frames,
         durationSec: preferredDurationSecFromFrames(frames, 24),
@@ -1063,6 +1069,7 @@ async function assignSegSourceVideoFromFile(editor, index, file) {
         const seg = editor.timeline.segments[index];
         if (!seg) return false;
         seg.sourceVideo = {
+            mediaKind: "video",
             totalFrames: prep.totalFrames,
             video: { ...clip, frameMap: [], deletedSourceRanges: [] },
             videoClips: [clip],
@@ -1094,14 +1101,68 @@ async function assignSegSourceVideoFromFile(editor, index, file) {
     }
 }
 
+async function assignSegSourceImageFromFile(editor, index, file) {
+    if (!isBatchImageFile(file)) return false;
+    const key = groupSlotKey(editor, index, "source-video", 0);
+    beginSlotLoad(editor, key, t("slot.loading.upload"));
+    try {
+        const uploaded = await uploadMedia(file, (ratio, cur, total) => {
+            updateSlotLoad(editor, key, { status: t("slot.loading.upload"), ratio, cur, total });
+        });
+        const imageFile = relPath(uploaded);
+        const dims = await editor.probeInputImageDimensions(imageFile, uploaded?.type || "input");
+        const seg = editor.timeline.segments[index];
+        if (!seg) return false;
+        const resolved = durationToClampedMiniMaxFrames(
+            Number(seg.durationSec) || defaultDurationSec(resolveMixedGroupKey(seg)),
+            24,
+        );
+        seg.sourceVideo = {
+            mediaKind: "image",
+            totalFrames: resolved.frames,
+            rangeStart: 0,
+            rangeEnd: resolved.frames,
+            image: {
+                imageFile,
+                fileName: uploaded?.name || file.name,
+                type: uploaded?.type || "input",
+                subfolder: uploaded?.subfolder || "",
+                width: dims.width || 0,
+                height: dims.height || 0,
+            },
+            video: { frameMap: [], deletedSourceRanges: [] },
+            videoClips: [],
+        };
+        seg.durationSec = resolved.durationSec;
+        seg.frameCount = resolved.frames;
+        seg.length = resolved.frames;
+        seg._videoFrameCount = resolved.frames;
+        endSlotLoad(editor, key);
+        editor.renderImageBatchGroups();
+        editor.commit(false, { syncTimeline: true });
+        editor.updateVideoNameLabel?.();
+        return true;
+    } catch (err) {
+        endSlotLoad(editor, key);
+        console.error("[MiniMax H3Director] mixed source image upload failed:", err);
+        void editor.showBdMessage?.(t("snapshot.errorTitle"), t("upload.alertFailed", { err: err?.message || err }));
+        return false;
+    }
+}
+
 function uploadSegSourceVideo(editor, index) {
-    pickFile("video/*,.mp4,.mov,.webm,.mkv,.avi,.m4v,.mpg,.mpeg,.mts,.ts", (file) => {
-        void assignSegSourceVideoFromFile(editor, index, file);
+    pickFile("image/*,video/*,.jpg,.jpeg,.png,.webp,.bmp,.gif,.mp4,.mov,.webm,.mkv,.avi,.m4v,.mpg,.mpeg,.mts,.ts", (file) => {
+        if (isBatchImageFile(file)) void assignSegSourceImageFromFile(editor, index, file);
+        else void assignSegSourceVideoFromFile(editor, index, file);
     });
 }
 
 function sourceVideoFullFrameMap(sourceVideo) {
     const source = sourceVideo || {};
+    if (source.mediaKind === "image" && source.image?.imageFile) {
+        const count = Math.max(0, Math.round(Number(source.totalFrames) || 0));
+        return Array.from({ length: count }, () => ({ clip: 0, frame: 0 }));
+    }
     const video = source.video || source;
     if (Array.isArray(video.frameMap) && video.frameMap.length) {
         return video.frameMap.map((entry) => (
@@ -1155,7 +1216,7 @@ function appendSourceVideoResolutionControl(container, editor, seg, { showTitle 
     restoreButton.type = "button";
     restoreButton.className = "bd-batch-source-video-restore";
     restoreButton.textContent = t("batch.restoreVideo");
-    restoreButton.disabled = !hasVideo;
+    restoreButton.disabled = !hasVideo || seg.sourceVideo?.mediaKind === "image";
     restoreButton.onclick = (event) => {
         event.stopPropagation();
         restoreSegSourceVideo(editor, seg);
@@ -1177,7 +1238,7 @@ function appendSourceVideoResolutionControl(container, editor, seg, { showTitle 
     if (showTitle) {
         const title = document.createElement("span");
         title.className = "bd-batch-source-video-title";
-        title.textContent = t("batch.sourceVideo");
+        title.textContent = t("batch.sourceMedia");
         head.append(title, actions);
         container.appendChild(head);
     } else {
@@ -1201,12 +1262,43 @@ function syncSourceRangeDurationInput(editor, seg, index, frameCount) {
 
 function mountSegSourceVideoTimeline(container, editor, seg, index, { showHeader = true } = {}) {
     if (showHeader) appendSourceVideoResolutionControl(container, editor, seg);
+    const source = seg.sourceVideo || {};
+    if (source.mediaKind === "image" && source.image?.imageFile) {
+        const src = document.createElement("div");
+        src.className = "bd-batch-src";
+        renderSourceSlot(src, source.image.imageFile);
+        src.title = t("source.imageTitleFilled", {
+            label: t("batch.sourceMedia"),
+            file: source.image.imageFile,
+        });
+        bindSlotActivate(src, {
+            editor,
+            hasMedia: true,
+            onPick: () => uploadSegSourceVideo(editor, index),
+            onPreview: () => openSlotPreview({
+                kind: "image",
+                src: viewUrl(source.image.imageFile),
+                label: t("batch.sourceMedia"),
+                onReplace: () => uploadSegSourceVideo(editor, index),
+            }),
+        });
+        bindOsFileDrop(src, (files) => {
+            const file = files.find((item) => isBatchImageFile(item) || isBatchVideoFile(item));
+            if (isBatchImageFile(file)) void assignSegSourceImageFromFile(editor, index, file);
+            else if (file) void assignSegSourceVideoFromFile(editor, index, file);
+        });
+        bindImageClipboardPaste(src, (file) => assignSegSourceImageFromFile(editor, index, file));
+        container.appendChild(src);
+        return;
+    }
     mountGroupVideoTimeline(container, {
         editor,
         seg,
+        sourceLabel: t("batch.sourceMedia"),
         onUpload: () => uploadSegSourceVideo(editor, index),
         onDropFile: (file) => {
-            if (isBatchVideoFile(file)) void assignSegSourceVideoFromFile(editor, index, file);
+            if (isBatchImageFile(file)) void assignSegSourceImageFromFile(editor, index, file);
+            else if (isBatchVideoFile(file)) void assignSegSourceVideoFromFile(editor, index, file);
         },
         onRangePreview: (start, end) => {
             syncSourceRangeDurationInput(editor, seg, index, Math.max(0, end - start));
@@ -1229,6 +1321,10 @@ function mountSegSourceVideoTimeline(container, editor, seg, index, { showHeader
             editor.scheduleRender?.();
         },
     });
+    const emptySource = container.querySelector(".bd-group-video-player");
+    if (emptySource) {
+        bindImageClipboardPaste(emptySource, (file) => assignSegSourceImageFromFile(editor, index, file));
+    }
 }
 
 function applySegFl2vImage(editor, index, kind, imageFile, width = 0, height = 0) {
@@ -1938,7 +2034,7 @@ function appendR2vMediaSections(
     assets.className = "bd-batch-r2v-assets";
 
     if (sourceVideo) {
-        const sourceSection = createR2vSection(t("batch.sourceVideo"), "");
+        const sourceSection = createR2vSection(t("batch.sourceMedia"), "");
         const actions = sourceSection.querySelector(".bd-r2v-section-actions");
         appendSourceVideoResolutionControl(actions, editor, seg, { showTitle: false });
         mountSegSourceVideoTimeline(sourceSection, editor, seg, index, { showHeader: false });
@@ -3595,12 +3691,17 @@ function appendBatchCard(list, editor, seg, index, ctx) {
             seg.frameCount = frames;
             seg.length = frames;
             seg._videoFrameCount = frames;
-            const displayedSec = isVideoEdit && sourceFrames <= 0 ? 0 : seg.durationSec;
+            const hasHeldImage = seg.sourceVideo?.mediaKind === "image"
+                && !!seg.sourceVideo?.image?.imageFile;
+            const hasSourceMedia = sourceFrames > 0 || hasHeldImage;
+            const displayedSec = isVideoEdit && !hasSourceMedia ? 0 : seg.durationSec;
             const minSec = isVideoEdit && sourceFrames > 0
                 ? preferredDurationSecFromFrames(sourceFrames, 24)
                 : minDurationSec();
             const durationTitle = t(
-                isVideoEdit ? "batch.videoEditDurationTooltip" : "batch.durationTooltip",
+                hasHeldImage
+                    ? "batch.heldImageDurationTooltip"
+                    : (isVideoEdit ? "batch.videoEditDurationTooltip" : "batch.durationTooltip"),
                 { frames, play: playSec },
             );
             secRow.innerHTML = `${t("batch.seconds")} <input type="number" data-batch-sec-index="${index}" data-batch-seg-id="${seg.id || ""}" min="${minSec}" max="${maxDurationSec()}" step="0.1" value="${displayedSec}" title="${durationTitle}">`;

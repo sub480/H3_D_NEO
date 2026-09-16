@@ -335,6 +335,7 @@ function sanitizeSegmentForPayload(seg) {
             : undefined,
         sourceVideo: rest.sourceVideo
             ? {
+                mediaKind: rest.sourceVideo.mediaKind === "image" ? "image" : "video",
                 totalFrames: Number(rest.sourceVideo.totalFrames) || 0,
                 rangeStart: rest.sourceVideo.rangeStart == null
                     ? undefined
@@ -346,6 +347,16 @@ function sanitizeSegmentForPayload(seg) {
                 videoClips: Array.isArray(rest.sourceVideo.videoClips)
                     ? rest.sourceVideo.videoClips.map(sanitizeVideoMedia)
                     : [],
+                image: rest.sourceVideo.image?.imageFile
+                    ? {
+                        imageFile: rest.sourceVideo.image.imageFile || "",
+                        fileName: rest.sourceVideo.image.fileName || "",
+                        type: rest.sourceVideo.image.type || "input",
+                        subfolder: rest.sourceVideo.image.subfolder || "",
+                        width: Number(rest.sourceVideo.image.width) || 0,
+                        height: Number(rest.sourceVideo.image.height) || 0,
+                    }
+                    : undefined,
             }
             : undefined,
         videoResolution: rest.videoResolution === "source" ? "source" : "target",

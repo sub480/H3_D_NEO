@@ -230,6 +230,25 @@ def _fit_source_clip_to_plan(plan, raw_clip: torch.Tensor) -> torch.Tensor:
     return fit_video_long_edge(raw_clip, plan.ref_max_size)
 
 
+def _segment_source_for_output(plan, seg) -> torch.Tensor:
+    if seg.source_clip is not None and int(seg.source_clip.shape[0]) > 0:
+        return seg.source_clip
+    if seg.task_key in {"t2v", "r2v"}:
+        return torch.full(
+            (1, int(plan.height), int(plan.width), 3),
+            0.5,
+            dtype=torch.float32,
+        )
+    return load_timeline_segment(plan.raw, seg.start_frame, seg.end_frame)
+
+
+def _pad_source_last_frame(frames: torch.Tensor, target_len: int) -> torch.Tensor:
+    missing = max(0, int(target_len) - int(frames.shape[0]))
+    if missing <= 0 or int(frames.shape[0]) <= 0:
+        return frames
+    return torch.cat([frames, frames[-1:].repeat(missing, 1, 1, 1)], dim=0)
+
+
 def build_source_images_output(
     plan,
     images_out: list[torch.Tensor],
@@ -250,8 +269,9 @@ def build_source_images_output(
             ]
         for seg, generated in zip(segs, images_out):
             target_len = int(generated.shape[0])
-            raw = load_timeline_segment(plan.raw, seg.start_frame, seg.end_frame)
+            raw = _segment_source_for_output(plan, seg)
             fitted = _fit_source_clip_to_plan(plan, raw)
+            fitted = _pad_source_last_frame(fitted, target_len)
             chunks.append(pad_or_trim_frames(fitted, target_len).cpu().float())
         return chunks
 
@@ -260,14 +280,27 @@ def build_source_images_output(
         chunks: list[torch.Tensor] = []
         for pos, index in enumerate(sorted(plan.run_indices)):
             seg = plan.segments[index]
-            raw = load_timeline_segment(plan.raw, seg.start_frame, seg.end_frame)
+            raw = _segment_source_for_output(plan, seg)
             fitted = _fit_source_clip_to_plan(plan, raw)
             chunk_len = (
                 int(segment_frame_counts[pos])
                 if segment_frame_counts is not None and pos < len(segment_frame_counts)
                 else int(seg.frame_count)
             )
+            fitted = _pad_source_last_frame(fitted, chunk_len)
             chunks.append(pad_or_trim_frames(fitted, chunk_len).cpu().float())
+        return [pad_or_trim_frames(cat_frames_variable_size(chunks), target_len)]
+    if any(seg.source_clip is not None for seg in plan.segments):
+        chunks = []
+        for pos, seg in enumerate(plan.segments):
+            raw = _segment_source_for_output(plan, seg)
+            fitted = _fit_source_clip_to_plan(plan, raw)
+            chunk_len = (
+                int(segment_frame_counts[pos])
+                if segment_frame_counts is not None and pos < len(segment_frame_counts)
+                else int(seg.frame_count)
+            )
+            chunks.append(_pad_source_last_frame(fitted, chunk_len).cpu().float())
         return [pad_or_trim_frames(cat_frames_variable_size(chunks), target_len)]
     raw = load_timeline_segment(plan.raw, 0, target_len)
     fitted = _fit_source_clip_to_plan(plan, raw)

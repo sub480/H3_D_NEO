@@ -189,7 +189,7 @@ export function mountGroupVideoTimeline(container, options) {
     const { editor, seg, onUpload, onDropFile, onRangeChange, onRangePreview } = options;
     const model = sourceModel(seg);
     const logicalRanges = clipLogicalRanges(model);
-    const videoLabel = t("slot.video", { n: 1 });
+    const videoLabel = options.sourceLabel || t("slot.video", { n: 1 });
     const firstFile = model.clips[0]?.videoFile || model.clips[0]?.fileName || "";
     const sourceTitle = firstFile
         ? t("ref.videoTitleFilled", { label: videoLabel, file: firstFile })

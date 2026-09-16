@@ -197,6 +197,9 @@ def _segment_source_media_identity(
         return tuple(identity for identity in identities if not identity.endswith(":"))
     if task_key in {"v2v", "rv2v"}:
         source = seg_data.get("sourceVideo") or {}
+        if str(source.get("mediaKind") or "").lower() == "image":
+            identity = _image_ref_identity(source.get("image") or {})
+            return (f"source-image:{identity}",) if identity else ()
         video = source.get("video") if isinstance(source.get("video"), dict) else source
         clips = source.get("videoClips") if isinstance(source.get("videoClips"), list) else []
         identities = [
@@ -640,27 +643,47 @@ def build_gen_director_plan(
                 ref_max_size=ref_max,
             )
         elif load_media and is_selected and task_key == MIXED_KEY and seg_task_key in {"v2v", "rv2v"}:
-            source_timeline = _mixed_source_video_timeline(
-                seg_data,
-                timeline,
-                target_width=out_w,
-                target_height=out_h,
-            )
-            if source_timeline is None:
-                raise ValueError(
-                    f"混合模式组 #{idx + 1} 是 {seg_task_key}，但没有源视频。"
-                    "请在该组上传源视频，或选择其他组类型。"
+            source = seg_data.get("sourceVideo") or {}
+            if str(source.get("mediaKind") or "").lower() == "image":
+                image_ref = source.get("image") or {}
+                if not (image_ref.get("imageFile") or image_ref.get("imageB64")):
+                    raise ValueError(
+                        f"混合模式组 #{idx + 1} 是 {seg_task_key}，但没有源图片。"
+                        "请在该组上传源图片或视频，或选择其他组类型。"
+                    )
+                mixed_video_source = _load_gen_image_tensor(image_ref)
+                if str(seg_data.get("videoResolution") or "target") == "source":
+                    mixed_video_source = fit_video_long_edge(mixed_video_source, ref_max)
+                else:
+                    mixed_video_source = fit_canvas(mixed_video_source, out_w, out_h)
+                source_audio_timeline = {
+                    "frameRate": timeline.get("frameRate") or H3_FPS,
+                    "totalFrames": max(1, int(end) - int(start)),
+                    "video": {},
+                    "videoClips": [],
+                }
+            else:
+                source_timeline = _mixed_source_video_timeline(
+                    seg_data,
+                    timeline,
+                    target_width=out_w,
+                    target_height=out_h,
                 )
-            source_audio_timeline = source_timeline
-            source_count = int(source_timeline["totalFrames"])
-            requested_count = max(1, int(end) - int(start))
-            mixed_video_source = load_timeline_segment(
-                source_timeline,
-                0,
-                min(source_count, requested_count),
-            )
-            if str(seg_data.get("videoResolution") or "target") != "source":
-                mixed_video_source = fit_canvas(mixed_video_source, out_w, out_h)
+                if source_timeline is None:
+                    raise ValueError(
+                        f"混合模式组 #{idx + 1} 是 {seg_task_key}，但没有源视频。"
+                        "请在该组上传源图片或视频，或选择其他组类型。"
+                    )
+                source_audio_timeline = source_timeline
+                source_count = int(source_timeline["totalFrames"])
+                requested_count = max(1, int(end) - int(start))
+                mixed_video_source = load_timeline_segment(
+                    source_timeline,
+                    0,
+                    min(source_count, requested_count),
+                )
+                if str(seg_data.get("videoResolution") or "target") != "source":
+                    mixed_video_source = fit_canvas(mixed_video_source, out_w, out_h)
         if seg_task_key == "i2v" and seg_refs:
             log.info(
                 "i2v segment #%d: ignoring %d reference image(s); using source video context only",
