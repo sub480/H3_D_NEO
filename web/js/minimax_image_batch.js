@@ -29,6 +29,7 @@ import {
     newBatchSegment,
     normalizeSegmentSeed,
     normalizeSegmentSeedMode,
+    normalizeVideoFit,
     preferredDurationSecFromFrames,
     refAudioLabel,
     refImageLabel,
@@ -198,7 +199,7 @@ function resolveSegmentDurationSec(seg) {
     return defaultDurationSec(resolveTaskKey(seg.taskType || ""));
 }
 
-function resolveVideoSegmentDuration(taskKey, seg, rawSec = resolveSegmentDurationSec(seg)) {
+function resolveVideoSegmentDuration(taskKey, seg, rawSec = resolveSegmentDurationSec(seg), { enforceSourceFrames = true } = {}) {
     const segTaskKey = taskKey === "mixed" ? resolveMixedGroupKey(seg) : taskKey;
     const heldImage = seg.sourceVideo?.mediaKind === "image";
     const sourceFrames = ["v2v", "rv2v"].includes(segTaskKey)
@@ -210,7 +211,7 @@ function resolveVideoSegmentDuration(taskKey, seg, rawSec = resolveSegmentDurati
         maxDurationSec(),
     );
     const requested = durationToClampedMiniMaxFrames(clamped, 24);
-    const frames = Math.max(sourceFrames, requested.frames);
+    const frames = enforceSourceFrames ? Math.max(sourceFrames, requested.frames) : requested.frames;
     if (heldImage) {
         seg.sourceVideo.totalFrames = frames;
         seg.sourceVideo.rangeStart = 0;
@@ -411,8 +412,9 @@ export const IMAGE_BATCH_STYLES = `
 .bd-batch-v2v .bd-batch-media{width:100%;max-width:none;min-width:0;min-height:0;height:100%;align-self:stretch;overflow:auto;background:#0c0c0c;border:1px solid #262626;border-radius:10px;padding:10px 12px;box-sizing:border-box}
 .bd-batch-source-video-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:2px}
 .bd-batch-source-video-title{color:#eaeaea;font-size:11px;font-weight:700}
-.bd-batch-source-video-actions{display:flex;align-items:center;gap:6px;margin-left:auto}
-.bd-batch-video-resolution{min-width:0;max-width:132px;background:#161616;border:1px solid #3a3a3a;border-radius:6px;color:#eee;padding:3px 6px;font-size:11px}
+.bd-batch-source-video-actions{display:flex;align-items:center;gap:6px;margin-left:auto;flex-wrap:wrap;justify-content:flex-end}
+.bd-batch-video-resolution,.bd-batch-video-fit{min-width:0;max-width:118px;background:#161616;border:1px solid #3a3a3a;border-radius:6px;color:#eee;padding:3px 6px;font-size:11px}
+.bd-batch-video-fit.hidden{display:none!important}
 .bd-batch-source-video-restore{background:#181818;border:1px solid #444;color:#ccc;border-radius:4px;padding:3px 7px;font-size:10px;cursor:pointer;white-space:nowrap}
 .bd-batch-source-video-restore:disabled{opacity:.45;cursor:not-allowed}
 .bd-batch-source-video-restore:not(:disabled):hover{border-color:#666;color:#fff}
@@ -761,6 +763,47 @@ function cloneRefs(refs) {
     } catch {
         return refs.map((r) => ({ ...r }));
     }
+}
+
+function cloneValue(value) {
+    if (value == null) return value;
+    try { return JSON.parse(JSON.stringify(value)); } catch { return value; }
+}
+
+function sourceSelectionFrameCount(sourceVideo) {
+    const source = sourceVideo || {};
+    if (source.mediaKind === "image") {
+        return Math.max(0, Math.round(Number(source.rangeEnd) || Number(source.totalFrames) || 0));
+    }
+    return sourceVideoFrameMap(source).length;
+}
+
+function syncSourceMaterialFromFirstGroup(editor, index) {
+    const segments = editor?.timeline?.segments;
+    const target = segments?.[index];
+    const first = segments?.[0];
+    if (!target || !first?.sourceVideo) return false;
+    target.sourceVideo = cloneValue(first.sourceVideo);
+    target.previewB64 = "";
+    target.previewFrames = [];
+    editor.renderImageBatchGroups?.();
+    editor.commit?.(false, { syncTimeline: true });
+    editor.updateVideoNameLabel?.();
+    editor.scheduleRender?.();
+    return true;
+}
+
+function syncSegmentDurationFromSource(editor, index) {
+    const live = editor?.timeline?.segments?.[index];
+    const count = sourceSelectionFrameCount(live?.sourceVideo);
+    if (!live || count <= 0) return false;
+    const updated = applyBatchSegmentDuration(editor, index, preferredDurationSecFromFrames(count, 24));
+    if (!updated) return false;
+    editor.commit?.(false, { syncTimeline: true });
+    editor.flushTimelineSync?.();
+    editor.updateVideoNameLabel?.();
+    editor.renderImageBatchGroups?.();
+    return true;
 }
 
 /** Copy global.refs into batch segments that have no refs (r2i only). */
@@ -1206,8 +1249,28 @@ function appendSourceVideoResolutionControl(container, editor, seg, { showTitle 
         option.selected = value === current;
         select.appendChild(option);
     }
+    const fitSelect = document.createElement("select");
+    fitSelect.className = "bd-batch-video-fit";
+    fitSelect.setAttribute("data-i18n-title", "tooltip.videoFit");
+    fitSelect.title = t("tooltip.videoFit");
+    const currentFit = normalizeVideoFit(seg.videoFit);
+    seg.videoFit = currentFit;
+    for (const value of ["contain", "crop"]) {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = t(`batch.videoFit.${value}`);
+        option.selected = value === currentFit;
+        fitSelect.appendChild(option);
+    }
+    fitSelect.classList.toggle("hidden", current !== "target");
     select.onchange = () => {
         seg.videoResolution = select.value === "source" ? "source" : "target";
+        fitSelect.classList.toggle("hidden", seg.videoResolution !== "target");
+        editor.commit(false, { syncTimeline: true });
+        editor.flushTimelineSync?.();
+    };
+    fitSelect.onchange = () => {
+        seg.videoFit = normalizeVideoFit(fitSelect.value);
         editor.commit(false, { syncTimeline: true });
         editor.flushTimelineSync?.();
     };
@@ -1234,7 +1297,7 @@ function appendSourceVideoResolutionControl(container, editor, seg, { showTitle 
         editor.updateVideoNameLabel?.();
         editor.scheduleRender?.();
     };
-    actions.append(select, restoreButton, deleteButton);
+    actions.append(select, fitSelect, restoreButton, deleteButton);
     if (showTitle) {
         const title = document.createElement("span");
         title.className = "bd-batch-source-video-title";
@@ -1300,22 +1363,19 @@ function mountSegSourceVideoTimeline(container, editor, seg, index, { showHeader
             if (isBatchImageFile(file)) void assignSegSourceImageFromFile(editor, index, file);
             else if (isBatchVideoFile(file)) void assignSegSourceVideoFromFile(editor, index, file);
         },
+        onSyncMaterial: () => syncSourceMaterialFromFirstGroup(editor, index),
+        onSyncSeconds: () => syncSegmentDurationFromSource(editor, index),
         onRangePreview: (start, end) => {
-            syncSourceRangeDurationInput(editor, seg, index, Math.max(0, end - start));
+            void start;
+            void end;
         },
         onRangeChange: (start, end) => {
             const source = seg.sourceVideo;
             if (!source) return;
             source.rangeStart = start;
             source.rangeEnd = end;
-            const frameCount = Math.max(0, end - start);
-            seg.durationSec = preferredDurationSecFromFrames(frameCount, 24);
-            seg.frameCount = frameCount;
-            seg.length = frameCount;
-            seg._videoFrameCount = frameCount;
             seg.previewB64 = "";
             seg.previewFrames = [];
-            syncSourceRangeDurationInput(editor, seg, index, frameCount);
             editor.commit(false, { syncTimeline: true });
             editor.updateVideoNameLabel?.();
             editor.scheduleRender?.();
@@ -2960,6 +3020,31 @@ function directorHasSigmasLink(node) {
     return Array.isArray(inp.links) && inp.links.length > 0;
 }
 
+function _selfliftDrawerEl(editor, name) {
+    return editor?.selfLiftPanelEl?.querySelector(`[data-w="${name}"]`);
+}
+
+function _selfliftCacheFlag(editor, name, fallback = false) {
+    const node = editor?.node;
+    if (node?.widgets?.some((item) => item?.name === name)) {
+        return _boolWidget(node, name);
+    }
+    const el = _selfliftDrawerEl(editor, name);
+    if (el) return el.type === "checkbox" ? !!el.checked : _boolWidget({ widgets: [{ name, value: el.value }] }, name);
+    return !!fallback;
+}
+
+function _selfliftCacheValue(editor, name, fallback) {
+    const node = editor?.node;
+    if (node?.widgets?.some((item) => item?.name === name)) {
+        return _batchWidgetValue(node, name, fallback);
+    }
+    const el = _selfliftDrawerEl(editor, name);
+    if (el && el.type === "checkbox") return el.checked ? "true" : "false";
+    if (el && el.value != null && el.value !== "") return el.value;
+    return fallback;
+}
+
 function passCachePayload(editor, index) {
     const node = editor?.node;
     if (!node) return null;
@@ -2987,6 +3072,22 @@ function passCachePayload(editor, index) {
         shift_audio: Number(_batchWidgetValue(node, "shift_audio", 3)),
         sigmas_linked: directorHasSigmasLink(node),
         lora_trigger_words: readLoraTriggerWords(editor),
+        selflift_enable: _selfliftCacheFlag(editor, "selflift_enable"),
+        selflift_split_mode: _selfliftCacheValue(editor, "selflift_split_mode", "highres_steps"),
+        selflift_highres_steps: _selfliftCacheValue(editor, "selflift_highres_steps", "2"),
+        selflift_transition_step: _selfliftCacheValue(editor, "selflift_transition_step", "6"),
+        selflift_lowres_scale: _selfliftCacheValue(editor, "selflift_lowres_scale", "0.5"),
+        selflift_latent_upscale_model: _selfliftCacheValue(editor, "selflift_latent_upscale_model", ""),
+        selflift_native_low_carry: _selfliftCacheFlag(editor, "selflift_native_low_carry", true),
+        selflift_sampler_mode: _selfliftCacheValue(editor, "selflift_sampler_mode", "euler"),
+        selflift_rho: _selfliftCacheValue(editor, "selflift_rho", "0"),
+        selflift_w_min: _selfliftCacheValue(editor, "selflift_w_min", "0.5"),
+        selflift_w_max: _selfliftCacheValue(editor, "selflift_w_max", "1"),
+        selflift_latent_upsample: _selfliftCacheValue(editor, "selflift_latent_upsample", "bilinear"),
+        selflift_enable_latent_chunking: _selfliftCacheFlag(editor, "selflift_enable_latent_chunking"),
+        selflift_enable_tiling: _selfliftCacheFlag(editor, "selflift_enable_tiling"),
+        selflift_tile_count: _selfliftCacheValue(editor, "selflift_tile_count", "2"),
+        selflift_tile_overlap: _selfliftCacheValue(editor, "selflift_tile_overlap", "128"),
     };
     if (r2vLoraTriggerIsLinked(editor)) {
         payload.lora_trigger_words_r2v = readLoraTriggerWords(editor, "lora_trigger_words_r2v");
@@ -3685,7 +3786,12 @@ function appendBatchCard(list, editor, seg, index, ctx) {
         if (isVideo) {
             const secRow = document.createElement("label");
             secRow.className = "bd-batch-fc";
-            const { frames, durationSec: syncedSec, sourceFrames } = resolveVideoSegmentDuration(key, seg);
+            const { frames, durationSec: syncedSec, sourceFrames } = resolveVideoSegmentDuration(
+                key,
+                seg,
+                resolveSegmentDurationSec(seg),
+                { enforceSourceFrames: false },
+            );
             const playSec = framesToDurationSec(frames, 24);
             seg.durationSec = syncedSec;
             seg.frameCount = frames;
@@ -3704,8 +3810,17 @@ function appendBatchCard(list, editor, seg, index, ctx) {
                     : (isVideoEdit ? "batch.videoEditDurationTooltip" : "batch.durationTooltip"),
                 { frames, play: playSec },
             );
-            secRow.innerHTML = `${t("batch.seconds")} <input type="number" data-batch-sec-index="${index}" data-batch-seg-id="${seg.id || ""}" min="${minSec}" max="${maxDurationSec()}" step="0.1" value="${displayedSec}" title="${durationTitle}">`;
-            const secInput = secRow.querySelector("input");
+            secRow.append(document.createTextNode(`${t("batch.seconds")} `));
+            const secInput = document.createElement("input");
+            secInput.type = "number";
+            secInput.dataset.batchSecIndex = String(index);
+            secInput.dataset.batchSegId = String(seg.id || "");
+            secInput.min = String(minSec);
+            secInput.max = String(maxDurationSec());
+            secInput.step = "0.1";
+            secInput.value = String(displayedSec);
+            secInput.title = durationTitle;
+            secRow.appendChild(secInput);
             // Do not rewrite value/title while focused: frame snapping would
             // bounce 20.7↔20.5 and interrupt typing. Normalize on blur.
             let secFocused = false;

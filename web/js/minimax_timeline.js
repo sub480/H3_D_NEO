@@ -87,7 +87,7 @@ import {
     wireBatchRunSelectControls,
     wireMediaDuration,
 } from "./minimax_image_batch.js";
-import { closePassPanels, mountDirectorRefinePanel, mountDirectorSamplePanel } from "./minimax_refine.js";
+import { closePassPanels, mountDirectorFaceRefinePanel, mountDirectorRefinePanel, mountDirectorSamplePanel, mountDirectorSelfLiftPanel } from "./minimax_refine.js";
 import {
     extractReferenceAudioFromExistingVideo,
     hasDuplicateReferenceAudio,
@@ -360,6 +360,7 @@ function sanitizeSegmentForPayload(seg) {
             }
             : undefined,
         videoResolution: rest.videoResolution === "source" ? "source" : "target",
+        videoFit: rest.videoFit === "crop" ? "crop" : "contain",
     };
 }
 
@@ -1085,6 +1086,8 @@ const STYLES = `
 .bd-refine-panel .bd-refine-field.row{flex-direction:row;align-items:center;gap:6px}
 .bd-refine-panel .bd-refine-field>span{color:#888;font-size:10px;white-space:nowrap}
 .bd-refine-panel .bd-refine-divider{grid-column:1/-1;height:1px;background:#383838;margin:3px 0 1px}
+.bd-refine-panel .bd-refine-group{grid-column:1/-1!important;color:#bbb;font-size:11px;font-weight:600;padding-top:4px}
+.bd-refine-panel .bd-refine-group.hidden{display:none!important}
 .bd-refine-panel .bd-refine-divider.hidden{display:none!important}
 .bd-refine-panel select,.bd-refine-panel input[type=number]{width:100%;box-sizing:border-box;background:#111;color:#ddd;border:1px solid #333;border-radius:4px;height:26px;padding:0 6px;font-size:11px}
 .bd-refine-panel input[type=checkbox]{width:14px;height:14px;accent-color:#4fff8f;margin:0;flex-shrink:0}
@@ -2839,6 +2842,7 @@ class H3_D_NEOEditor {
                     endImage: clean.endImage || null,
                     sourceVideo: clean.sourceVideo,
                     videoResolution: clean.videoResolution === "source" ? "source" : "target",
+                    videoFit: clean.videoFit === "crop" ? "crop" : "contain",
                     continuityFromPrev: isSegmentContinuityFromPrev(clean, index),
                     continuityForcePrevCache: isSegmentContinuityForcePrevCache(clean, index),
                     refImageSize: resolveSegmentRefImageSize(clean, this.timeline.output),
@@ -3058,6 +3062,8 @@ class H3_D_NEOEditor {
         this.outputBarEl = outputBar;
         mountDirectorSamplePanel(this);
         mountDirectorRefinePanel(this);
+        mountDirectorSelfLiftPanel(this);
+        mountDirectorFaceRefinePanel(this);
         const continuityPanel = document.createElement("div");
         continuityPanel.className = "bd-refine-panel bd-continuity-panel hidden";
         continuityPanel.setAttribute("data-r", "segment-continuity-panel");

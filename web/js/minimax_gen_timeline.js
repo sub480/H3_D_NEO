@@ -439,6 +439,10 @@ export function normalizeSegmentSeedMode(value) {
     return mode === "random" || mode === "fixed" ? mode : "inherit";
 }
 
+export function normalizeVideoFit(value) {
+    return String(value || "").trim() === "crop" ? "crop" : "contain";
+}
+
 export function normalizeSegmentSeed(value) {
     const raw = String(value ?? "0").trim();
     if (!/^\d+$/.test(raw)) return "0";

@@ -35,6 +35,7 @@ _MEDIA_KEYS = (
     "endImage",
     "sourceVideo",
     "videoResolution",
+    "videoFit",
     "audioMode",
     "refImageSize",
 )

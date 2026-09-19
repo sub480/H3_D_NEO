@@ -220,6 +220,14 @@ def _pad_h3_patch(region):
     return region
 
 
+def _cond_entry(cond):
+    if isinstance(cond, dict):
+        return cond
+    if isinstance(cond, (list, tuple)) and len(cond) >= 2 and isinstance(cond[1], dict):
+        return cond[1]
+    return None
+
+
 def _iter_cond_dicts(guider):
     original = getattr(guider, "original_conds", None)
     if not original:
@@ -228,8 +236,9 @@ def _iter_cond_dicts(guider):
         if not cond_list:
             continue
         for cond in cond_list:
-            if isinstance(cond, dict):
-                yield cond
+            item = _cond_entry(cond)
+            if item is not None:
+                yield item
 
 
 def _latent_from_ref(ref):
@@ -251,10 +260,11 @@ def _crop_ref_item(ref, tile_axis, start, end, full_hw):
         return region
     item = dict(ref)
     item["latent"] = region
-    if "latent_h" in item:
-        item["latent_h"] = int(region.shape[-2])
-    if "latent_w" in item:
-        item["latent_w"] = int(region.shape[-1])
+    work = region.unsqueeze(0) if region.ndim == 4 else region
+    item["latent_h"] = int(work.shape[-2])
+    item["latent_w"] = int(work.shape[-1])
+    if "latent_t" in item:
+        item["latent_t"] = int(work.shape[-3])
     return item
 
 
@@ -288,8 +298,9 @@ def _iter_all_cond_dicts(guider):
             if not cond_list:
                 continue
             for cond in cond_list:
-                if isinstance(cond, dict):
-                    yield cond
+                item = _cond_entry(cond)
+                if item is not None:
+                    yield item
 
 
 def _crop_payload_inplace(payload, tile_axis, start, end, full_hw):
@@ -312,7 +323,15 @@ def _crop_payload_inplace(payload, tile_axis, start, end, full_hw):
         for src in list(payload.get("keyframes") or []) + list(payload.get("refs") or []):
             if isinstance(src, dict) and isinstance(src.get("latent"), torch.Tensor):
                 new_latents.append(src["latent"])
-        payload["cond_video_latents"] = new_latents
+            elif isinstance(src, torch.Tensor):
+                new_latents.append(src)
+        if new_latents:
+            payload["cond_video_latents"] = new_latents
+        elif old_latents:
+            payload["cond_video_latents"] = [
+                _crop_ref_item(item, tile_axis, start, end, full_hw)
+                for item in old_latents
+            ]
         restores.append(lambda: payload.__setitem__("cond_video_latents", old_latents))
     return restores
 
@@ -477,7 +496,7 @@ def _prepare_minimax_conds(guider, full_h, full_w, debug=False):
                     continue
                 item = dict(kf)
                 latent = item.get("latent")
-                if not isinstance(latent, torch.Tensor) or latent.dim() != 5:
+                if not isinstance(latent, torch.Tensor) or latent.dim() not in (4, 5):
                     continue
                 old_hw = tuple(latent.shape[-2:])
                 if old_hw != full_hw:

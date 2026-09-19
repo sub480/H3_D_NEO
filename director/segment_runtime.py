@@ -8,7 +8,7 @@ import io
 import torch
 from PIL import Image
 
-from ..lib.image_prep import fit_canvas, fit_video_long_edge
+from ..lib.image_prep import fit_frames_to_canvas, fit_video_long_edge
 from ..lib.video_io import load_timeline_segment
 from .frame_align import pad_or_trim_frames
 from .plan import DirectorPlan
@@ -99,8 +99,12 @@ def source_passthrough_chunk(plan: DirectorPlan, seg) -> torch.Tensor:
     """Scaled source frames for skipped v2v segments with no generation cache yet."""
     raw_clip = resolve_segment_raw_clip(plan, seg)
     target_len = raw_clip.shape[0]
-    if plan.output_mode == "fixed":
-        clip = fit_canvas(raw_clip, plan.width, plan.height)
+    if getattr(seg, "use_source_resolution", False):
+        clip = raw_clip
+    elif plan.output_mode == "fixed":
+        clip = fit_frames_to_canvas(
+            raw_clip, plan.width, plan.height, getattr(seg, "video_fit", "contain") or "contain"
+        )
     else:
         clip = fit_video_long_edge(raw_clip, plan.ref_max_size)
     return pad_or_trim_frames(clip, target_len).cpu().float()

@@ -279,6 +279,7 @@ def load_video_resampled(
     storage_width: int | None = None,
     storage_height: int | None = None,
     long_edge: int = 848,
+    hold_past_eof: bool = True,
 ) -> torch.Tensor:
     """Decode selected resampled frame indices from a video file."""
     if not frame_indices:
@@ -295,6 +296,7 @@ def load_video_resampled(
 
     source_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
     source_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+    native_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
 
     out_w, out_h, rotate_90_cw = _resolve_load_dimensions(
         source_w,
@@ -314,6 +316,12 @@ def load_video_resampled(
     for src_idx in unique:
         t_sec = max(0.0, src_idx / float(frame_rate or 24.0))
         native_frame = int(round(t_sec * native_fps))
+        if native_count > 0 and native_frame >= native_count:
+            if not hold_past_eof:
+                break
+            if fallback is not None:
+                decoded[src_idx] = fallback
+            continue
         cap.set(cv2.CAP_PROP_POS_FRAMES, native_frame)
         ok, bgr = cap.read()
         if not ok or bgr is None:
@@ -346,6 +354,12 @@ def load_video_resampled(
 
     if not decoded:
         raise ValueError(f"No frames decoded from video: {path}")
+
+    if not hold_past_eof:
+        rows = [decoded[int(idx)] for idx in frame_indices if int(idx) in decoded]
+        if not rows:
+            raise ValueError(f"No frames decoded from video: {path}")
+        return torch.from_numpy(np.stack(rows, axis=0))
 
     rows = []
     last = next(iter(decoded.values()))
@@ -618,6 +632,19 @@ def load_reference_video_clip(
     )
     count = max(1, int(num_frames))
     offset = max(0, int(start_frame))
+    try:
+        meta = probe_video_file(path)
+        duration = float(meta.get("duration") or 0.0)
+        native_fps = float(meta.get("native_fps") or frame_rate or 24.0)
+        native_count = int(meta.get("frame_count") or 0)
+        if duration <= 0 and native_count > 0 and native_fps > 0:
+            duration = native_count / native_fps
+        if duration > 0:
+            last_idx = max(0, int(duration * frame_rate + 1e-6) - 1)
+            offset = min(offset, last_idx)
+            count = min(count, last_idx - offset + 1)
+    except Exception as exc:
+        log.debug("Reference video probe failed for %s: %s", path, exc)
     frame_indices = list(range(offset, offset + count))
     return load_video_resampled(
         path,
@@ -626,6 +653,7 @@ def load_reference_video_clip(
         storage_width=ref_block.get("storageWidth"),
         storage_height=ref_block.get("storageHeight"),
         long_edge=long_edge,
+        hold_past_eof=False,
     )
 
 

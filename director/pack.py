@@ -769,6 +769,45 @@ def _collect_missing_media(obj: Any, dest: Path, rel_prefix: str, missing: list[
             _collect_missing_media(val, dest, rel_prefix, missing)
 
 
+def _fill_empty_prompts_from_pack_files(timeline: dict, extracted: Path) -> None:
+    """Restore prompt text only where timeline cards are empty.
+
+    Older exports keep the authoritative text in shared_params/group.json while
+    timeline.json may contain empty placeholders. Never overwrite non-empty
+    timeline text because users may have edited it after export.
+    """
+    shared_path = extracted / "shared_params" / "shared_params.json"
+    shared = _read_json(shared_path) if shared_path.is_file() else {}
+    if isinstance(shared, dict):
+        global_block = timeline.get("global")
+        if not isinstance(global_block, dict):
+            global_block = {}
+            timeline["global"] = global_block
+        if not str(global_block.get("prompt") or "").strip():
+            if str(shared.get("prompt") or "").strip():
+                global_block["prompt"] = shared.get("prompt")
+    groups_root = extracted / "asset_groups"
+    if not groups_root.is_dir():
+        return
+    groups = sorted((p for p in groups_root.iterdir() if p.is_dir()), key=lambda p: p.name)
+    buckets = [timeline.get("segments"), timeline.get("shots")]
+    for index, group_dir in enumerate(groups):
+        group_path = group_dir / "group.json"
+        raw = _read_json(group_path) if group_path.is_file() else {}
+        if not isinstance(raw, dict):
+            continue
+        prompt = str(raw.get("prompt") or "")
+        negative = str(raw.get("negativePrompt") or "")
+        for bucket in buckets:
+            if not isinstance(bucket, list) or index >= len(bucket) or not isinstance(bucket[index], dict):
+                continue
+            card = bucket[index]
+            if prompt and not str(card.get("prompt") or "").strip():
+                card["prompt"] = prompt
+            if negative and not str(card.get("negativePrompt") or "").strip():
+                card["negativePrompt"] = negative
+
+
 def import_extracted_pack(extracted: Path) -> dict[str, Any]:
     pack_path = extracted / "pack.json"
     if not pack_path.is_file():
@@ -792,6 +831,7 @@ def import_extracted_pack(extracted: Path) -> dict[str, Any]:
     timeline_version = int(timeline.get("version") or 0)
     if timeline_version != 5:
         raise ValueError(f"Unsupported timeline version: {timeline_version}")
+    _fill_empty_prompts_from_pack_files(timeline, extracted)
 
     pack_id = uuid.uuid4().hex[:12]
     rel_prefix = f"H3_D_NEO/{INPUT_PACKS_DIR_NAME}/{pack_id}"

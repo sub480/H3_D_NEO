@@ -69,11 +69,17 @@ def list_h3_latent_upscale_models() -> list[str]:
         except OSError:
             pass
         for ext in ("*.safetensors", "*.pth"):
-            names.extend(os.path.basename(p) for p in glob.glob(os.path.join(root, ext)))
+            for path in glob.glob(os.path.join(root, "**", ext), recursive=True):
+                if not os.path.isfile(path):
+                    continue
+                names.append(os.path.relpath(path, root).replace("\\", "/"))
         try:
             import folder_paths
 
-            names.extend(folder_paths.get_filename_list(LATENT_UPSCALE_FOLDER) or [])
+            names.extend(
+                str(n).replace("\\", "/")
+                for n in (folder_paths.get_filename_list(LATENT_UPSCALE_FOLDER) or [])
+            )
         except Exception:
             pass
     out = sorted({n for n in names if n and not n.startswith("(")})
@@ -319,14 +325,20 @@ def _resolve_model_path(name: str) -> str:
     ensure_latent_upscale_folder()
     import folder_paths
 
+    name = str(name or "").replace("\\", "/").strip()
     path = folder_paths.get_full_path(LATENT_UPSCALE_FOLDER, name)
     if path:
         return path
     root = ensure_latent_upscale_folder()
     if root:
-        candidate = os.path.join(root, name)
+        candidate = os.path.join(root, *name.split("/"))
         if os.path.isfile(candidate):
             return candidate
+        base = os.path.basename(name)
+        if base:
+            for found in glob.glob(os.path.join(root, "**", base), recursive=True):
+                if os.path.isfile(found):
+                    return found
     raise FileNotFoundError(
         f"H3 latent upscaler weights not found: {name}. "
         f"Put the 3D safetensors in ComfyUI/models/{LATENT_UPSCALE_FOLDER}/"

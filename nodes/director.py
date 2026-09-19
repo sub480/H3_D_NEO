@@ -15,11 +15,26 @@ from .director_common import (
     timeline_required_inputs,
     director_perf_inputs,
 )
-from .director_refine import director_refine_widget_inputs
+from .director_refine import (
+    director_face_refine_widget_inputs,
+    director_refine_widget_inputs,
+    director_selflift_widget_inputs,
+)
 
 _CATEGORY = "H3_D_NEO"
 
 _DEFAULT_GLOBAL_PROMPT = "A cinematic scene with natural motion and synchronized ambience"
+
+
+def _widget_bool(value, default: bool = False) -> bool:
+    if value is True or value == 1:
+        return True
+    if value is False or value == 0:
+        return False
+    if value is None:
+        return default
+    text = str(value).strip().lower()
+    return text in {"1", "true", "on", "yes"}
 
 
 _DIRECTOR_LINKED_INPUTS = frozenset({
@@ -262,6 +277,8 @@ class H3_D_NEO:
                 ),
                 **director_perf_inputs(),
                 **director_refine_widget_inputs(),
+                **director_selflift_widget_inputs(),
+                **director_face_refine_widget_inputs(),
             },
             "hidden": {"unique_id": "UNIQUE_ID"},
         }
@@ -300,9 +317,9 @@ class H3_D_NEO:
         pre_cache_signature = first_pass_cache_disk_signature(unique_id)
         return _director_input_signature(kwargs, pre_cache_signature)
 
-    RETURN_TYPES = ("IMAGE", "AUDIO", "INT", "IMAGE", "IMAGE", "BOOLEAN")
-    RETURN_NAMES = ("images", "audio", "frame_count", "source_images", "images_pre_refine", "refine_enabled")
-    OUTPUT_IS_LIST = (True, True, False, True, True, False)
+    RETURN_TYPES = ("IMAGE", "AUDIO", "INT", "IMAGE", "IMAGE", "BOOLEAN", "IMAGE")
+    RETURN_NAMES = ("images", "audio", "frame_count", "source_images", "images_pre_refine", "refine_enabled", "images_pre_face_refine")
+    OUTPUT_IS_LIST = (True, True, False, True, True, False, True)
     FUNCTION = "execute"
     CATEGORY = _CATEGORY
     DESCRIPTION = (
@@ -349,6 +366,49 @@ class H3_D_NEO:
         **kwargs,
     ):
         refine_enabled = bool(kwargs.get("refine_enable", False))
+        face_refine = {
+            "enabled": _widget_bool(kwargs.get("face_refine_enable", False)),
+            "detector": kwargs.get("face_refine_detector"),
+            "confidence": kwargs.get("face_refine_confidence"),
+            "crop_factor": kwargs.get("face_refine_crop_factor"),
+            "canvas_width": kwargs.get("face_refine_canvas_width"),
+            "canvas_height": kwargs.get("face_refine_canvas_height"),
+            "canvas_mode": kwargs.get("face_refine_canvas_mode"),
+            "select": kwargs.get("face_refine_select"),
+            "denoise": kwargs.get("face_refine_denoise"),
+            "steps": kwargs.get("face_refine_steps"),
+            "sampler": kwargs.get("face_refine_sampler"),
+            "scheduler": kwargs.get("face_refine_scheduler"),
+            "seed_mode": kwargs.get("face_refine_seed_mode"),
+            "paste_region": kwargs.get("face_refine_paste_region"),
+            "mask_dilation": kwargs.get("face_refine_mask_dilation"),
+            "feather": kwargs.get("face_refine_feather"),
+            "colour_match": kwargs.get("face_refine_colour_match"),
+            "blend": kwargs.get("face_refine_blend"),
+        }
+        clear_vram_before_face_refine = _widget_bool(kwargs.get("clear_vram_before_face_refine", False))
+        clear_vram_before_refine = _widget_bool(kwargs.get("clear_vram_before_refine", False))
+        export_pre_face_refine = _widget_bool(kwargs.get("export_pre_face_refine", False))
+        selflift = None
+        if _widget_bool(kwargs.get("selflift_enable", False)):
+            from ..director.selflift.pack import pack_selflift
+            selflift = pack_selflift(
+                split_mode=kwargs.get("selflift_split_mode", "highres_steps"),
+                highres_steps=kwargs.get("selflift_highres_steps", 2),
+                transition_step=kwargs.get("selflift_transition_step", 6),
+                lowres_scale=kwargs.get("selflift_lowres_scale", 0.5),
+                latent_upscale_model=kwargs.get("selflift_latent_upscale_model"),
+                sampler_mode=kwargs.get("selflift_sampler_mode", "euler"),
+                native_low_carry=_widget_bool(kwargs.get("selflift_native_low_carry"), True),
+                rho=kwargs.get("selflift_rho", 0.0),
+                w_min=kwargs.get("selflift_w_min", 0.5),
+                w_max=kwargs.get("selflift_w_max", 1.0),
+                latent_upsample=kwargs.get("selflift_latent_upsample", "bilinear"),
+                enable_latent_chunking=_widget_bool(kwargs.get("selflift_enable_latent_chunking")),
+                enable_tiling=_widget_bool(kwargs.get("selflift_enable_tiling")),
+                tile_count=kwargs.get("selflift_tile_count", 2),
+                tile_overlap=kwargs.get("selflift_tile_overlap", 128),
+            )
         refine = pack_director_builtin_refine(
             enabled=refine_enabled,
             refine_model=refine_model,
@@ -369,6 +429,8 @@ class H3_D_NEO:
             ref_max_size=ref_max_size,
             unique_id=unique_id,
             director_prompt=director_prompt,
+            selflift=selflift,
+            face_refine=face_refine,
             refine=refine,
             lora_trigger_words=lora_trigger_words,
             lora_trigger_words_r2v=lora_trigger_words_r2v,
@@ -379,7 +441,7 @@ class H3_D_NEO:
             raw["liveTaeVae"] = vae_name
 
         try:
-            combined, segment_outputs, segment_audios, export_frame_counts, pre_combined, pre_segments = (
+            combined, segment_outputs, segment_audios, export_frame_counts, pre_combined, pre_segments, pre_face_combined, pre_face_segments = (
                 execute_director_plan_core(
                     plan,
                     node_id=unique_id,
@@ -396,22 +458,28 @@ class H3_D_NEO:
                     shift_video=shift_video,
                     shift_audio=shift_audio,
                     clear_vram_between_segments=True,
+                    clear_vram_before_refine=clear_vram_before_refine,
+                    clear_vram_before_face_refine=clear_vram_before_face_refine,
+                    export_pre_face_refine=export_pre_face_refine,
                 )
             )
 
-            return (
-                *finalize_director_outputs(
-                    plan,
-                    combined,
-                    segment_outputs,
-                    export_source_images=export_source_images,
-                    segment_audios=segment_audios,
-                    segment_frame_counts=export_frame_counts,
-                    pre_refine_combined=pre_combined,
-                    pre_refine_segments=pre_segments,
-                ),
-                refine_enabled,
+            finalized = finalize_director_outputs(
+                plan,
+                combined,
+                segment_outputs,
+                export_source_images=export_source_images,
+                segment_audios=segment_audios,
+                segment_frame_counts=export_frame_counts,
+                pre_refine_combined=pre_combined,
+                pre_refine_segments=pre_segments,
+                pre_face_combined=pre_face_combined,
+                pre_face_segments=pre_face_segments,
+                export_pre_face_refine=export_pre_face_refine,
             )
+            # Keep this order aligned with RETURN_NAMES/OUTPUT_IS_LIST:
+            # pre_face output is the final slot, after the scalar refine flag.
+            return (*finalized[:5], refine_enabled, finalized[5])
         finally:
             # Full source/reference PCM is execution-scoped.
             cache = getattr(plan, "audio_decode_cache", None)

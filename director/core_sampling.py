@@ -14,6 +14,7 @@ log = logging.getLogger("ComfyUI-MiniMaxH3-Director.director.core_sampling")
 
 PhaseCallback = Callable[[str, float], None]
 StepPreviewCallback = Callable[[int, int, Any], None]
+StepStateCallback = Callable[[int, int, Any, Any], None]
 
 
 def _unpack_node_output(out):
@@ -81,6 +82,9 @@ def sample_single_stage(
     tile=None,
     after_shift=None,
     shift_cache: ShiftedModelCache | None = None,
+    on_step_state: StepStateCallback | None = None,
+    zero_noise: bool = False,
+    noise_override=None,
 ):
     import torch
     from comfy_extras.nodes_custom_sampler import (
@@ -124,7 +128,26 @@ def sample_single_stage(
             model_use = remasked
 
     sampler_obj = _unpack_node_output(KSamplerSelect.execute(str(sampler_name)))[0]
-    noise_obj = _unpack_node_output(RandomNoise.execute(int(seed)))[0]
+    if noise_override is not None:
+        class _FixedNoise:
+            def __init__(self, seed_value):
+                self.seed = int(seed_value)
+
+            def generate_noise(self, input_latent): return noise_override
+        noise_obj = _FixedNoise(seed)
+    elif zero_noise:
+        class _ZeroNoise:
+            def __init__(self, seed_value):
+                self.seed = int(seed_value)
+
+            def generate_noise(self, input_latent):
+                import torch
+                samples = input_latent["samples"] if isinstance(input_latent, dict) else input_latent
+                if torch.is_tensor(samples): return torch.zeros_like(samples)
+                return type(samples)(tuple(torch.zeros_like(x) for x in samples.unbind()))
+        noise_obj = _ZeroNoise(seed)
+    else:
+        noise_obj = _unpack_node_output(RandomNoise.execute(int(seed)))[0]
 
     neg = negative if negative else []
     if _use_basic_guider(cfg, neg):
@@ -163,7 +186,7 @@ def sample_single_stage(
             preview_every=preview_every,
         )
 
-    orig_sample = guider.sample if on_step_preview is not None and not tile_cfg else None
+    orig_sample = guider.sample if (on_step_preview is not None or on_step_state is not None) and not tile_cfg else None
     if orig_sample is not None:
         every = max(1, int(preview_every))
 
@@ -171,6 +194,8 @@ def sample_single_stage(
             inner_cb = kwargs.get("callback")
 
             def callback(step, x0, x, total_steps):
+                if on_step_state is not None:
+                    on_step_state(int(step), int(total_steps), x0, x)
                 try:
                     last = max(0, int(total_steps) - 1)
                     if int(preview_every) < 0:

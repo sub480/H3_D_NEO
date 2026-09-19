@@ -318,6 +318,8 @@ class SegmentPlan:
     source_clip: torch.Tensor | None = None
     source_frame_count: int = 0
     use_source_resolution: bool = False
+    # v2v/rv2v target-resolution fit: contain (letterbox) or crop (center-cover).
+    video_fit: str = "contain"
     source_audio_timeline: dict | None = None
     source_media_identity: tuple[str, ...] = ()
     # When external groups filter by「选择运行」, plan.index is the compact run
@@ -416,6 +418,8 @@ class DirectorPlan:
     # Full source-video PCM reused only during this Director execution.
     audio_decode_cache: dict = field(default_factory=dict, repr=False)
     refine: dict | None = None
+    selflift: dict | None = None
+    face_refine: dict | None = None
     # Sampling knobs stamped at execute time (first-pass cache fingerprint).
     sample_seed: int = 0
     sample_cfg: float = 1.0
@@ -1203,6 +1207,20 @@ def plan_summary(plan: DirectorPlan) -> str:
         refine_line = None
     if refine_line:
         lines.append(refine_line)
+    try:
+        from .selflift.pack import selflift_report_line
+        selflift_line = selflift_report_line(plan)
+    except Exception:
+        selflift_line = None
+    if selflift_line:
+        lines.append(selflift_line)
+    try:
+        from .face_refine.pack import face_refine_report_line
+        face_line = face_refine_report_line(plan)
+    except Exception:
+        face_line = None
+    if face_line:
+        lines.append(face_line)
     if plan.continuity_enabled:
         pinned = [
             seg.index + 1

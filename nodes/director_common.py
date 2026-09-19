@@ -25,7 +25,7 @@ from ..director.plan import (
 )
 from ..director.progress import report_director_planning
 from ..director.segment_mp4_export import released_output_slots
-from ..lib.image_prep import cat_frames_variable_size, fit_canvas, fit_video_long_edge
+from ..lib.image_prep import cat_frames_variable_size, fit_frames_to_canvas, fit_video_long_edge
 from ..lib.video_io import load_timeline_segment
 from ..lib.task_prompts import task_type_combo_options
 
@@ -174,6 +174,8 @@ def prepare_director_plan(
     ref_max_size: int,
     unique_id: str | None,
     director_prompt=None,
+    selflift=None,
+    face_refine=None,
     refine=None,
     lora_trigger_words=None,
     lora_trigger_words_r2v=None,
@@ -206,6 +208,10 @@ def prepare_director_plan(
         height=height,
         ref_max_size=ref_max_size,
     )
+    from ..director.selflift.pack import normalize_selflift_pack
+    plan.selflift = normalize_selflift_pack(selflift)
+    from ..director.face_refine.pack import normalize_face_refine_pack
+    plan.face_refine = normalize_face_refine_pack(face_refine)
     plan = _attach_refine(plan, refine)
     plan = apply_lora_trigger_words(plan, lora_trigger_words)
     plan = apply_lora_trigger_words_r2v(plan, lora_trigger_words_r2v)
@@ -224,9 +230,12 @@ def _attach_refine(plan, refine):
     return plan
 
 
-def _fit_source_clip_to_plan(plan, raw_clip: torch.Tensor) -> torch.Tensor:
+def _fit_source_clip_to_plan(plan, raw_clip: torch.Tensor, seg=None) -> torch.Tensor:
     if plan.output_mode == "fixed":
-        return fit_canvas(raw_clip, plan.width, plan.height)
+        mode = "contain"
+        if seg is not None and not bool(getattr(seg, "use_source_resolution", False)):
+            mode = getattr(seg, "video_fit", "contain") or "contain"
+        return fit_frames_to_canvas(raw_clip, plan.width, plan.height, mode)
     return fit_video_long_edge(raw_clip, plan.ref_max_size)
 
 
@@ -270,7 +279,7 @@ def build_source_images_output(
         for seg, generated in zip(segs, images_out):
             target_len = int(generated.shape[0])
             raw = _segment_source_for_output(plan, seg)
-            fitted = _fit_source_clip_to_plan(plan, raw)
+            fitted = _fit_source_clip_to_plan(plan, raw, seg)
             fitted = _pad_source_last_frame(fitted, target_len)
             chunks.append(pad_or_trim_frames(fitted, target_len).cpu().float())
         return chunks
@@ -281,7 +290,7 @@ def build_source_images_output(
         for pos, index in enumerate(sorted(plan.run_indices)):
             seg = plan.segments[index]
             raw = _segment_source_for_output(plan, seg)
-            fitted = _fit_source_clip_to_plan(plan, raw)
+            fitted = _fit_source_clip_to_plan(plan, raw, seg)
             chunk_len = (
                 int(segment_frame_counts[pos])
                 if segment_frame_counts is not None and pos < len(segment_frame_counts)
@@ -294,7 +303,7 @@ def build_source_images_output(
         chunks = []
         for pos, seg in enumerate(plan.segments):
             raw = _segment_source_for_output(plan, seg)
-            fitted = _fit_source_clip_to_plan(plan, raw)
+            fitted = _fit_source_clip_to_plan(plan, raw, seg)
             chunk_len = (
                 int(segment_frame_counts[pos])
                 if segment_frame_counts is not None and pos < len(segment_frame_counts)
@@ -377,6 +386,9 @@ def finalize_director_outputs(
     segment_frame_counts: list[int] | None = None,
     pre_refine_combined=None,
     pre_refine_segments: list | None = None,
+    pre_face_combined=None,
+    pre_face_segments: list | None = None,
+    export_pre_face_refine: bool = False,
     block_final_images: bool = False,
 ):
     is_batch = is_prompt_batch_timeline(plan.raw, plan.global_task_key)
@@ -423,6 +435,24 @@ def finalize_director_outputs(
             log.warning("images_pre_refine layout failed: %s", exc)
             pre_refine_out = images_out
 
+    pre_face_out = None
+    from ..director.face_refine.pack import face_refine_enabled
+    if export_pre_face_refine and face_refine_enabled(plan):
+        face_segs = pre_face_segments if pre_face_segments else segment_outputs
+        face_comb = pre_face_combined if pre_face_combined is not None else combined
+        try:
+            pre_face_out, _ = _layout_image_batches(
+                plan,
+                face_comb,
+                face_segs,
+                export_segments=export_segments,
+                is_batch=is_batch,
+                video_batch=video_batch,
+            )
+        except Exception as exc:
+            log.warning("images_pre_face_refine layout failed: %s", exc)
+            pre_face_out = images_out
+
     if export_segments:
         released_slots = sorted(
             set(released_slots) | set(released_output_slots(pre_refine_out, segment_frame_counts))
@@ -439,6 +469,14 @@ def finalize_director_outputs(
             ]
             if kept_pre_refine:
                 pre_refine_out = kept_pre_refine
+            if pre_face_out is not None:
+                kept_pre_face = [
+                    pre_face_out[index]
+                    for index in keep
+                    if index < len(pre_face_out)
+                ]
+                if kept_pre_face:
+                    pre_face_out = kept_pre_face
             if segment_audios:
                 segment_audios = [
                     segment_audios[index]
@@ -491,7 +529,11 @@ def finalize_director_outputs(
     images_out = _ensure_nonempty_image_batches(images_out, label="images")
     source_images_out = _ensure_nonempty_image_batches(source_images_out, label="source_images")
     pre_refine_out = _ensure_nonempty_image_batches(pre_refine_out, label="images_pre_refine")
+    if pre_face_out is None:
+        pre_face_out = ExecutionBlocker(None)
+    else:
+        pre_face_out = _ensure_nonempty_image_batches(pre_face_out, label="images_pre_face_refine")
 
     if block_final_images:
         images_out = ExecutionBlocker(None)
-    return images_out, audio_out, frame_count, source_images_out, pre_refine_out
+    return images_out, audio_out, frame_count, source_images_out, pre_refine_out, pre_face_out

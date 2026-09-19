@@ -141,6 +141,9 @@ async def minimax_upload_video_chunk(request):
     if not upload_id or chunk_field is None:
         return web.Response(status=400, text="Missing upload_id or chunk.")
 
+    if os.path.splitext(filename)[1].lower() not in VIDEO_EXTS:
+        return web.Response(status=400, text="Unsupported video format.")
+
     if ".." in upload_id or "/" in upload_id or "\\" in upload_id:
         return web.Response(status=400, text="Invalid upload_id.")
 
@@ -523,6 +526,24 @@ async def minimax_list_vae_approx(request):
         return web.json_response({"error": str(exc)}, status=500)
 
 
+async def minimax_list_drawer_models(request):
+    try:
+        from .face_refine.pack import detector_choices
+        from .h3_latent_upscale import MISSING_MODEL_LABEL, list_h3_latent_upscale_models
+
+        models = [
+            name for name in list_h3_latent_upscale_models()
+            if name and name != MISSING_MODEL_LABEL
+        ]
+        return web.json_response({
+            "detectors": detector_choices(),
+            "latent_upscale_models": models,
+        })
+    except Exception as exc:
+        log.warning("MiniMax H3 Director list drawer models failed: %s", exc)
+        return web.json_response({"error": str(exc)}, status=500)
+
+
 async def minimax_list_input_media(request):
     try:
         kind = str(request.query.get("kind") or "").strip().lower()
@@ -580,6 +601,38 @@ async def minimax_first_pass_cache_status(request):
         plan.sample_sigmas_linked = bool(body.get("sigmas_linked"))
         plan.sample_shift_video = float(body.get("shift_video") or 12.0)
         plan.sample_shift_audio = float(body.get("shift_audio") or 3.0)
+        from .selflift.pack import pack_selflift
+
+        def _flag(value, default=False):
+            # Match the Director drawer: only explicit true values enable SelfLift.
+            # Leftover combo strings from old widgets_values must not count as on.
+            if value is True or value == 1:
+                return True
+            if value is False or value == 0:
+                return False
+            if value is None:
+                return default
+            text = str(value).strip().lower()
+            return text in {"1", "true", "on", "yes"}
+
+        if _flag(body.get("selflift_enable")):
+            plan.selflift = pack_selflift(
+                split_mode=body.get("selflift_split_mode", "highres_steps"),
+                highres_steps=body.get("selflift_highres_steps", 2),
+                transition_step=body.get("selflift_transition_step", 6),
+                lowres_scale=body.get("selflift_lowres_scale", 0.5),
+                latent_upscale_model=body.get("selflift_latent_upscale_model"),
+                sampler_mode=body.get("selflift_sampler_mode", "euler"),
+                native_low_carry=_flag(body.get("selflift_native_low_carry"), True),
+                rho=body.get("selflift_rho", 0),
+                w_min=body.get("selflift_w_min", 0.5),
+                w_max=body.get("selflift_w_max", 1),
+                latent_upsample=body.get("selflift_latent_upsample", "bilinear"),
+                enable_latent_chunking=_flag(body.get("selflift_enable_latent_chunking")),
+                enable_tiling=_flag(body.get("selflift_enable_tiling")),
+                tile_count=body.get("selflift_tile_count", 2),
+                tile_overlap=body.get("selflift_tile_overlap", 128),
+            )
         raw_cache_index = body.get("cache_index")
         cache_index = int(raw_cache_index) if raw_cache_index is not None else None
         return web.json_response(inspect_first_pass_cache(node_id, plan, ui_index=cache_index))
@@ -697,6 +750,7 @@ def register_routes() -> bool:
     _register_route(routes, "POST", "/minimax/director/export_video_range", minimax_export_video_range)
     _register_route(routes, "GET", "/minimax/director/list_input_media", minimax_list_input_media)
     _register_route(routes, "GET", "/minimax/director/list_vae_approx", minimax_list_vae_approx)
+    _register_route(routes, "GET", "/minimax/director/list_drawer_models", minimax_list_drawer_models)
     _register_route(
         routes,
         "POST",

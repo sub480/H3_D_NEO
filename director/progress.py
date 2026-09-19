@@ -12,6 +12,10 @@ DIRECTOR_PHASES = (
     "sample",
     "upscale",
     "refine",
+    "face_refine",
+    "selflift_low",
+    "selflift_lift",
+    "selflift_high",
     "decode",
 )
 
@@ -21,6 +25,10 @@ PHASE_LABELS = {
     "sample": "采样",
     "upscale": "放大",
     "refine": "精修采样",
+    "face_refine": "FaceRefine 修脸",
+    "selflift_low": "SelfLift 低清",
+    "selflift_lift": "SelfLift 提升",
+    "selflift_high": "SelfLift 高清",
     "decode": "AV 解码",
     "plan": "解析时间轴 / 加载视频",
     "finish": "全部完成",

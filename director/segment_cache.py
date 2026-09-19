@@ -232,6 +232,8 @@ def _segment_identity_fingerprint(seg: SegmentPlan, plan: DirectorPlan) -> dict[
     if bool(getattr(seg, "use_source_resolution", False)):
         payload["use_source_resolution"] = True
         payload["source_canvas"] = source_canvas
+    elif str(getattr(seg, "video_fit", "contain") or "contain") == "crop":
+        payload["video_fit"] = "crop"
     source_frame_count = int(getattr(seg, "source_frame_count", 0) or 0)
     if seg.task_key in {"v2v", "rv2v"} and seg.frame_count > source_frame_count > 0:
         payload["video_edit_padding"] = "hold_last_v1"
@@ -260,6 +262,8 @@ def first_pass_cache_fingerprint(seg: SegmentPlan, plan: DirectorPlan) -> dict[s
         previous = _previous_run_segment(seg, plan)
         if previous is not None:
             fp["continuity_predecessor"] = first_pass_cache_fingerprint(previous, plan)
+    from .selflift.pack import selflift_fingerprint
+    fp.update(selflift_fingerprint(plan))
     return fp
 
 
@@ -273,6 +277,10 @@ def segment_cache_fingerprint(seg: SegmentPlan, plan: DirectorPlan) -> dict[str,
     from .refine_pack import refine_fingerprint
 
     fp.update(refine_fingerprint(plan))
+    from .face_refine.pack import face_refine_fingerprint
+    fp.update(face_refine_fingerprint(plan))
+    from .selflift.pack import selflift_fingerprint
+    fp.update(selflift_fingerprint(plan))
     return fp
 
 
@@ -864,6 +872,7 @@ def save_first_pass_cache(
     av_latent: dict | None = None,
     frames: torch.Tensor | None = None,
     handoff: dict[str, Any] | None = None,
+    low_carry: dict | None = None,
 ) -> None:
     """Persist first-pass AV latent for confirm-then-refine. Never raises."""
     if not node_id:
@@ -879,6 +888,7 @@ def save_first_pass_cache(
     latent_path = root / f"seg_{idx:04d}.pre.av.pt"
     frames_path = root / f"seg_{idx:04d}.pre.pt"
     handoff_path = root / f"seg_{idx:04d}.pre.handoff.json"
+    low_carry_path = root / f"seg_{idx:04d}.pre.low.pt"
     try:
         cpu_latent = _av_latent_to_cpu(av_latent)
         _write_via_temp(latent_path, lambda p: torch.save(cpu_latent, p))
@@ -892,6 +902,10 @@ def save_first_pass_cache(
                     encoding="utf-8",
                 ),
             )
+        if isinstance(low_carry, dict) and "samples" in low_carry:
+            _write_via_temp(low_carry_path, lambda p: torch.save(_av_latent_to_cpu(low_carry), p))
+        else:
+            _safe_unlink(low_carry_path)
         if isinstance(frames, torch.Tensor) and frames.numel() > 0:
             payload = _frames_to_disk(frames)
             _write_via_temp(frames_path, lambda p: torch.save(payload, p))
@@ -1013,6 +1027,7 @@ def load_first_pass_cache(
     latent_path = root / f"seg_{idx:04d}.pre.av.pt"
     frames_path = root / f"seg_{idx:04d}.pre.pt"
     handoff_path = root / f"seg_{idx:04d}.pre.handoff.json"
+    low_carry_path = root / f"seg_{idx:04d}.pre.low.pt"
     if not meta_path.is_file() or not latent_path.is_file():
         return None
     try:
@@ -1050,7 +1065,15 @@ def load_first_pass_cache(
                     handoff = data
             except Exception:
                 handoff = {}
-        return {"av_latent": payload, "frames": frames, "handoff": handoff}
+        low_carry = None
+        if low_carry_path.is_file():
+            try:
+                candidate = torch.load(low_carry_path, map_location="cpu", weights_only=False)
+                if isinstance(candidate, dict) and "samples" in candidate:
+                    low_carry = candidate
+            except Exception as exc:
+                log.debug("Segment %d low carry skipped: %s", idx + 1, exc)
+        return {"av_latent": payload, "frames": frames, "handoff": handoff, "low_carry": low_carry}
     except Exception as exc:
         log.warning("Failed to load segment %d first-pass cache: %s", idx + 1, exc)
         return None

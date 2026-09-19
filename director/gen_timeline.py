@@ -11,6 +11,7 @@ from ..lib.image_prep import (
     assert_minimax_canvas,
     cat_frames_variable_size,
     fit_canvas,
+    fit_frames_to_canvas,
     fit_video_long_edge,
     resolve_output_dimensions,
 )
@@ -27,7 +28,9 @@ MIXED_GROUP_KEYS = frozenset({"t2v", "i2v", "fl2v", "r2v", "v2v", "rv2v"})
 IMAGE_BATCH_KEYS = frozenset()
 
 MIN_GEN_FRAMES = 1
-MIN_GEN_VIDEO_FRAMES = 4
+# MiniMax H3's AV latent/grid requires at least five video frames.  Keep the
+# planner, validation messages, and sampler input on the same lower bound.
+MIN_GEN_VIDEO_FRAMES = 5
 
 
 def is_gen_task_key(task_key: str) -> bool:
@@ -218,6 +221,14 @@ def _segment_source_media_identity(
         range_end = source.get("rangeEnd")
         return (f"source-video:{identity}:{map_digest}:{range_start}:{range_end}",) if identity else ()
     return ()
+
+
+def _v2v_video_fit(seg_data: dict | None) -> str:
+    return "crop" if str((seg_data or {}).get("videoFit") or "contain") == "crop" else "contain"
+
+
+def _fit_v2v_target_canvas(frames, width: int, height: int, seg_data: dict | None):
+    return fit_frames_to_canvas(frames, width, height, _v2v_video_fit(seg_data))
 
 
 def _mixed_source_video_timeline(
@@ -655,7 +666,9 @@ def build_gen_director_plan(
                 if str(seg_data.get("videoResolution") or "target") == "source":
                     mixed_video_source = fit_video_long_edge(mixed_video_source, ref_max)
                 else:
-                    mixed_video_source = fit_canvas(mixed_video_source, out_w, out_h)
+                    mixed_video_source = _fit_v2v_target_canvas(
+                        mixed_video_source, out_w, out_h, seg_data
+                    )
                 source_audio_timeline = {
                     "frameRate": timeline.get("frameRate") or H3_FPS,
                     "totalFrames": max(1, int(end) - int(start)),
@@ -683,7 +696,9 @@ def build_gen_director_plan(
                     min(source_count, requested_count),
                 )
                 if str(seg_data.get("videoResolution") or "target") != "source":
-                    mixed_video_source = fit_canvas(mixed_video_source, out_w, out_h)
+                    mixed_video_source = _fit_v2v_target_canvas(
+                        mixed_video_source, out_w, out_h, seg_data
+                    )
         if seg_task_key == "i2v" and seg_refs:
             log.info(
                 "i2v segment #%d: ignoring %d reference image(s); using source video context only",
@@ -763,6 +778,7 @@ def build_gen_director_plan(
                 source_clip=seg_source,
                 source_frame_count=source_range[2] if source_range is not None else 0,
                 use_source_resolution=use_source_resolution,
+                video_fit=_v2v_video_fit(seg_data if isinstance(seg_data, dict) else {}),
                 source_audio_timeline=source_audio_timeline,
                 source_media_identity=source_media_identity,
                 continuity_from_prev=resolve_segment_continuity_from_prev(

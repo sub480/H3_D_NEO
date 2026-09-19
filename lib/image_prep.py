@@ -141,6 +141,47 @@ def pad_frames_to_canvas(
     return out
 
 
+def fit_contain(
+    frames: torch.Tensor,
+    width: int,
+    height: int,
+    upscale_mode: str = "area",
+    fill: float = 0.5,
+) -> torch.Tensor:
+    """Scale frames to fit inside width×height, then center-pad. Never stretches."""
+    rgb = frames[..., :3]
+    if rgb.ndim != 4:
+        raise ValueError("frames must be [F, H, W, C]")
+    src_h, src_w = int(rgb.shape[1]), int(rgb.shape[2])
+    width = int(width)
+    height = int(height)
+    if src_h == height and src_w == width:
+        return rgb
+    if src_h <= 0 or src_w <= 0 or width <= 0 or height <= 0:
+        return pad_frames_to_canvas(rgb, max(1, width), max(1, height), fill=fill)
+    scale = min(width / src_w, height / src_h)
+    new_w = max(1, min(width, int(round(src_w * scale))))
+    new_h = max(1, min(height, int(round(src_h * scale))))
+    if new_w != src_w or new_h != src_h:
+        rgb = common_upscale(
+            rgb.movedim(-1, 1), new_w, new_h, upscale_mode, "disabled"
+        ).movedim(1, -1)
+    return pad_frames_to_canvas(rgb, width, height, fill=fill)
+
+
+def fit_frames_to_canvas(
+    frames: torch.Tensor,
+    width: int,
+    height: int,
+    mode: str = "crop",
+    upscale_mode: str = "area",
+) -> torch.Tensor:
+    """Fit frames onto a fixed canvas. ``contain`` letterboxes; anything else center-crops."""
+    if str(mode or "crop").lower() == "contain":
+        return fit_contain(frames, width, height, upscale_mode=upscale_mode)
+    return fit_canvas(frames, width, height, upscale_mode=upscale_mode)
+
+
 def cat_frames_variable_size(clips: list[torch.Tensor], *, fill: float = 0.5) -> torch.Tensor:
     """Concatenate frame clips along time, padding spatial dims when aspect ratios differ."""
     if not clips:

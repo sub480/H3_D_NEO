@@ -10,8 +10,9 @@ const STYLES = `
 .bd-group-video-player video{width:100%;height:100%;object-fit:contain;background:#050606}
 .bd-group-video-seek{width:100%;height:14px;margin:0;accent-color:#69d99a;cursor:pointer}
 .bd-group-video-seek:disabled{opacity:.4;cursor:not-allowed}
-.bd-group-video-controls{display:flex;align-items:center;gap:5px}
-.bd-group-video-controls button{width:25px;height:23px;padding:0;border:1px solid #364044;border-radius:4px;background:#15191b;color:#d6dcdf;cursor:pointer}
+    .bd-group-video-controls{display:flex;align-items:center;gap:5px}
+    .bd-group-video-controls button{width:25px;height:23px;padding:0;border:1px solid #364044;border-radius:4px;background:#15191b;color:#d6dcdf;cursor:pointer}
+    .bd-group-video-sync-material{margin-left:auto}
 .bd-group-video-time{font-size:10px;color:#899397;white-space:nowrap;font-variant-numeric:tabular-nums}
 .bd-group-video-track-viewport{width:100%;overflow-x:auto;overflow-y:hidden;border-radius:5px}
 .bd-group-video-track{position:relative;height:42px;min-width:100%;border:1px solid #354045;border-radius:5px;background:#0f1315;overflow:hidden;cursor:grab;box-sizing:border-box;touch-action:none;user-select:none}
@@ -186,7 +187,7 @@ function button(label, title = label) {
 
 export function mountGroupVideoTimeline(container, options) {
     injectStyles();
-    const { editor, seg, onUpload, onDropFile, onRangeChange, onRangePreview } = options;
+    const { editor, seg, onUpload, onDropFile, onRangeChange, onRangePreview, onSyncMaterial, onSyncSeconds } = options;
     const model = sourceModel(seg);
     const logicalRanges = clipLogicalRanges(model);
     const videoLabel = options.sourceLabel || t("slot.video", { n: 1 });
@@ -252,7 +253,28 @@ export function mountGroupVideoTimeline(container, options) {
     const exportRange = button("⇩", t("player.exportRange"));
     const time = document.createElement("span");
     time.className = "bd-group-video-time";
-    controls.append(play, mute, exportRange, time);
+    controls.append(play, mute, exportRange);
+    if (onSyncSeconds) {
+        const syncSeconds = button("⏱", t("player.syncSeconds"));
+        syncSeconds.className = "bd-group-video-sync-seconds";
+        syncSeconds.onclick = (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onSyncSeconds();
+        };
+        controls.appendChild(syncSeconds);
+    }
+    controls.appendChild(time);
+    if (onSyncMaterial) {
+        const syncMaterial = button("⟳", t("player.syncMaterial"));
+        syncMaterial.className = "bd-group-video-sync-material";
+        syncMaterial.onclick = (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onSyncMaterial();
+        };
+        controls.appendChild(syncMaterial);
+    }
     root.appendChild(controls);
 
     const trackViewport = document.createElement("div");

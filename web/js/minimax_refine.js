@@ -1,5 +1,6 @@
 /** MiniMax H3 Director built-in refine controls. */
 
+import { api } from "../../scripts/api.js";
 import { app } from "../../scripts/app.js";
 import {
     CUSTOM_ASPECT_RATIO,
@@ -384,6 +385,45 @@ const DIRECTOR_REFINE_COMFY_WIDGETS = [
     "refine_model",
     "refine_model_r2v",
     "upscale_model",
+    "bd_grp_selflift",
+    "selflift_enable",
+    "selflift_split_mode",
+    "selflift_highres_steps",
+    "selflift_transition_step",
+    "selflift_lowres_scale",
+    "selflift_latent_upscale_model",
+    "selflift_native_low_carry",
+    "selflift_sampler_mode",
+    "selflift_rho",
+    "selflift_w_min",
+    "selflift_w_max",
+    "selflift_latent_upsample",
+    "selflift_enable_latent_chunking",
+    "selflift_enable_tiling",
+    "selflift_tile_count",
+    "selflift_tile_overlap",
+    "bd_grp_face_refine",
+    "face_refine_enable",
+    "face_refine_detector",
+    "face_refine_confidence",
+    "face_refine_crop_factor",
+    "face_refine_canvas_width",
+    "face_refine_canvas_height",
+    "face_refine_canvas_mode",
+    "face_refine_select",
+    "face_refine_denoise",
+    "face_refine_steps",
+    "face_refine_sampler",
+    "face_refine_scheduler",
+    "face_refine_seed_mode",
+    "face_refine_paste_region",
+    "face_refine_mask_dilation",
+    "face_refine_feather",
+    "face_refine_colour_match",
+    "face_refine_blend",
+    "clear_vram_before_face_refine",
+    "clear_vram_before_refine",
+    "export_pre_face_refine",
 ];
 
 function directorHasNamedLink(node, name) {
@@ -440,6 +480,14 @@ export function closePassPanels(editor, except) {
         editor._mmxRefinePanelOpen = false;
         editor.refinePanelEl?.classList.add("hidden");
     }
+    if (except !== "selflift") {
+        editor._mmxSelfLiftPanelOpen = false;
+        editor.selfLiftPanelEl?.classList.add("hidden");
+    }
+    if (except !== "face") {
+        editor._mmxFaceRefinePanelOpen = false;
+        editor.faceRefinePanelEl?.classList.add("hidden");
+    }
     if (except !== "preview") {
         editor._mmxPreviewPanelOpen = false;
         editor.previewPanelEl?.classList.add("hidden");
@@ -450,6 +498,220 @@ export function closePassPanels(editor, except) {
         if (editor.segmentContinuityPanelEl) editor.segmentContinuityPanelEl.hidden = true;
     }
 }
+
+function normModelName(name) {
+    return String(name || "").replaceAll("\\", "/").trim();
+}
+
+function fillModelSelect(select, values, current) {
+    if (!select) return;
+    const cur = normModelName(current);
+    const items = [];
+    const seen = new Set();
+    for (const raw of values || []) {
+        const value = normModelName(raw);
+        if (!value || seen.has(value)) continue;
+        seen.add(value);
+        items.push(value);
+    }
+    if (cur && !seen.has(cur)) items.unshift(cur);
+    select.innerHTML = optionHtml(items, cur || items[0] || "");
+    if (cur) select.value = cur;
+}
+
+let _drawerModelsPromise = null;
+
+function loadDrawerModels(force = false) {
+    if (force) _drawerModelsPromise = null;
+    if (!_drawerModelsPromise) {
+        _drawerModelsPromise = api.fetchApi("/minimax/director/list_drawer_models")
+            .then(async (resp) => {
+                const data = resp.ok ? await resp.json() : {};
+                return {
+                    detectors: Array.isArray(data.detectors) ? data.detectors.map(normModelName).filter(Boolean) : [],
+                    latent_upscale_models: Array.isArray(data.latent_upscale_models) ? data.latent_upscale_models.map(normModelName).filter(Boolean) : [],
+                };
+            })
+            .catch(() => ({ detectors: [], latent_upscale_models: [] }));
+    }
+    return _drawerModelsPromise;
+}
+
+function applyDrawerModelsToEditor(editor, data) {
+    const node = editor?.node;
+    if (!node || !data) return;
+    const apply = (widgetName, values, select) => {
+        const widget = node.widgets?.find((x) => x.name === widgetName);
+        if (widget) {
+            if (!widget.options) widget.options = {};
+            if (values.length) widget.options.values = values;
+            if (widget.value) widget.value = normModelName(widget.value);
+        }
+        if (select) fillModelSelect(select, values, widget?.value);
+    };
+    apply("selflift_latent_upscale_model", data.latent_upscale_models, editor.selfLiftPanelEl?.querySelector(`[data-w="selflift_latent_upscale_model"]`));
+    apply("face_refine_detector", data.detectors, editor.faceRefinePanelEl?.querySelector(`[data-w="face_refine_detector"]`));
+    apply("refine_latent_upscale_model", data.latent_upscale_models, editor.refinePanelEl?.querySelector(`[data-w="refine_latent_upscale_model"]`));
+}
+
+function refreshDrawerModelSelects(editor, force = false) {
+    return loadDrawerModels(force).then((data) => applyDrawerModelsToEditor(editor, data));
+}
+
+export function mountDirectorSelfLiftPanel(editor) {
+    const node = editor?.node;
+    const bar = editor?.outputBarEl;
+    if (!node || !bar || editor._mmxSelfLiftPanelMounted) return;
+    editor._mmxSelfLiftPanelMounted = true;
+    const wrap = document.createElement("span");
+    wrap.className = "bd-out-refine-wrap";
+    wrap.innerHTML = `<button type="button" class="bd-btn" data-r="selflift-cfg">SelfLift</button>`;
+    const tools = bar.querySelector(".bd-live-preview-tools");
+    if (tools) bar.insertBefore(wrap, tools); else bar.appendChild(wrap);
+    const panel = document.createElement("div");
+    panel.className = "bd-refine-panel hidden";
+    panel.setAttribute("data-r", "selflift-panel");
+    panel.innerHTML = [
+        `<div class="bd-refine-group">渐进采样</div>`,
+        `<label class="bd-refine-field row"><input type="checkbox" data-w="selflift_enable"><span>启用 SelfLift</span></label>`,
+        refinePanelFieldHtml("split", "SelfLift split", "分段", `<select data-w="selflift_split_mode"><option value="highres_steps">highres_steps</option><option value="transition_step">transition_step</option></select>`),
+        refinePanelFieldHtml("high", "SelfLift high steps", "高清步数", `<input type="number" data-w="selflift_highres_steps" min="1" max="64" step="1">`),
+        refinePanelFieldHtml("trans", "SelfLift transition", "转场步数", `<input type="number" data-w="selflift_transition_step" min="1" max="200" step="1">`),
+        refinePanelFieldHtml("scale", "SelfLift low scale", "低清倍率", `<input type="number" data-w="selflift_lowres_scale" min="0.25" max="1" step="0.05">`),
+        refinePanelFieldHtml("samp", "SelfLift sampler", "采样器", `<select data-w="selflift_sampler_mode"><option value="euler">euler</option><option value="follow_director">follow_director</option></select>`),
+        `<label class="bd-refine-field row"><input type="checkbox" data-w="selflift_native_low_carry"><span>跨段 low carry</span></label>`,
+        `<div class="bd-refine-group">提升 / 3D</div>`,
+        refinePanelFieldHtml("model", "SelfLift model", "3D 权重", `<select data-w="selflift_latent_upscale_model"></select>`),
+        refinePanelFieldHtml("up", "SelfLift upsample", "插值", `<select data-w="selflift_latent_upsample"><option value="bilinear">bilinear</option><option value="nearest">nearest</option></select>`),
+        refinePanelFieldHtml("rho", "SelfLift rho", "rho", `<input type="number" data-w="selflift_rho" min="0" max="1" step="0.05">`),
+        refinePanelFieldHtml("wmin", "SelfLift w_min", "w_min", `<input type="number" data-w="selflift_w_min" min="0" max="1" step="0.05">`),
+        refinePanelFieldHtml("wmax", "SelfLift w_max", "w_max", `<input type="number" data-w="selflift_w_max" min="0" max="1" step="0.05">`),
+        `<label class="bd-refine-field row"><input type="checkbox" data-w="selflift_enable_latent_chunking"><span>3D 时间分块</span></label>`,
+        `<div class="bd-refine-group">高清分块</div>`,
+        `<label class="bd-refine-field row"><input type="checkbox" data-w="selflift_enable_tiling"><span>启用高清分块</span></label>`,
+        refinePanelFieldHtml("tiles", "SelfLift tiles", "分块数", `<input type="number" data-w="selflift_tile_count" min="1" max="8" step="1">`),
+        refinePanelFieldHtml("overlap", "SelfLift overlap", "重叠像素", `<input type="number" data-w="selflift_tile_overlap" min="0" max="2048" step="64">`),
+    ].join("");
+    bar.after(panel); editor.selfLiftBarEl = wrap; editor.selfLiftPanelEl = panel;
+    const write = (name, value) => { const src = node; const w = src?.widgets?.find((x) => x.name === name); if (!w) return; w.value = value; w.callback?.(value); src?.setDirtyCanvas?.(true, true); };
+    const sync = () => {
+        const src = node;
+        panel.classList.remove("linked");
+        const modelSelect = panel.querySelector(`[data-w="selflift_latent_upscale_model"]`);
+        if (modelSelect && src) {
+            const modelWidget = src.widgets?.find((x) => x.name === "selflift_latent_upscale_model");
+            const current = String(modelWidget?.value ?? "");
+            const values = modelWidget?.options?.values?.length
+                ? modelWidget.options.values
+                : (current ? [current] : [""]);
+            fillModelSelect(modelSelect, values, current);
+        }
+        for (const el of panel.querySelectorAll("[data-w]")) { const w = src?.widgets?.find((x) => x.name === el.getAttribute("data-w")); if (!w) continue; if (el.type === "checkbox") el.checked = isTruthyFlag(w.value); else if (w.value != null) el.value = w.value; }
+        const split = String(panel.querySelector(`[data-w="selflift_split_mode"]`)?.value || "highres_steps");
+        const rho = Number(panel.querySelector(`[data-w="selflift_rho"]`)?.value || 0);
+        const tiling = !!panel.querySelector(`[data-w="selflift_enable_tiling"]`)?.checked;
+        const setShow = (id, on) => { const el = panel.querySelector(`[data-show="${id}"]`); if (el) el.classList.toggle("hidden", !on); };
+        setShow("high", split !== "transition_step");
+        setShow("trans", split === "transition_step");
+        setShow("wmin", rho > 1e-8);
+        setShow("wmax", rho > 1e-8);
+        setShow("tiles", tiling);
+        setShow("overlap", tiling);
+        wrap.querySelector("button")?.classList.toggle("active", isTruthyFlag(src?.widgets?.find((x) => x.name === "selflift_enable")?.value));
+    };
+    wrap.querySelector("[data-r=selflift-cfg]").addEventListener("click", () => {
+        const next = !editor._mmxSelfLiftPanelOpen;
+        closePassPanels(editor, next ? "selflift" : "");
+        editor._mmxSelfLiftPanelOpen = next;
+        panel.classList.toggle("hidden", !next);
+        const after = () => { sync(); editor.resizeNodeForContentMinChange?.(); };
+        if (next) refreshDrawerModelSelects(editor).finally(after);
+        else after();
+    });
+    refreshDrawerModelSelects(editor).finally(sync);
+    panel.addEventListener("change", (e) => {
+        const el = e.target?.closest?.("[data-w]");
+        if (!el) return;
+        write(el.getAttribute("data-w"), el.type === "checkbox" ? String(!!el.checked) : el.type === "number" ? Number(el.value) : el.value);
+        sync();
+        if (editor._mmxSelfLiftPanelOpen) editor.resizeNodeForContentMinChange?.();
+    });
+    sync();
+}
+
+export function mountDirectorFaceRefinePanel(editor) {
+    const node = editor?.node;
+    const bar = editor?.outputBarEl;
+    if (!node || !bar || editor._mmxFaceRefinePanelMounted) return;
+    editor._mmxFaceRefinePanelMounted = true;
+    const wrap = document.createElement("span");
+    wrap.className = "bd-out-refine-wrap";
+    wrap.innerHTML = `<button type="button" class="bd-btn" data-r="face-refine-cfg">FaceRefine</button>`;
+    const tools = bar.querySelector(".bd-live-preview-tools");
+    if (tools) bar.insertBefore(wrap, tools); else bar.appendChild(wrap);
+    const panel = document.createElement("div");
+    panel.className = "bd-refine-panel hidden";
+    panel.setAttribute("data-r", "face-refine-panel");
+    panel.innerHTML = [
+        `<label class="bd-refine-field row"><input type="checkbox" data-w="face_refine_enable"><span>启用 FaceRefine</span></label>`,
+        `<label class="bd-refine-field row"><input type="checkbox" data-w="clear_vram_before_face_refine"><span>FaceRefine 前清理显存</span></label>`,
+        `<label class="bd-refine-field row"><input type="checkbox" data-w="clear_vram_before_refine"><span>二采前清理显存</span></label>`,
+        `<label class="bd-refine-field row"><input type="checkbox" data-w="export_pre_face_refine"><span>输出修脸前画面</span></label>`,
+        refinePanelFieldHtml("detector", "FaceRefine detector", "检测器", `<select data-w="face_refine_detector"></select>`),
+        refinePanelFieldHtml("confidence", "FaceRefine confidence", "置信度", `<input type="number" data-w="face_refine_confidence" min="0.05" max="0.95" step="0.01">`),
+        refinePanelFieldHtml("crop", "FaceRefine crop", "裁剪倍率", `<input type="number" data-w="face_refine_crop_factor" min="1.2" max="8" step="0.1">`),
+        refinePanelFieldHtml("canvas", "FaceRefine canvas", "画布", `<select data-w="face_refine_canvas_mode"><option value="manual">manual</option><option value="auto_capped_768">auto_capped_768</option></select>`),
+        refinePanelFieldHtml("canvas-width", "FaceRefine canvas width", "宽度", `<input type="number" data-w="face_refine_canvas_width" min="128" max="1344" step="32">`),
+        refinePanelFieldHtml("canvas-height", "FaceRefine canvas height", "高度", `<input type="number" data-w="face_refine_canvas_height" min="128" max="1344" step="32">`),
+        refinePanelFieldHtml("denoise", "FaceRefine denoise", "denoise", `<input type="number" data-w="face_refine_denoise" min="0.02" max="1" step="0.01">`),
+        refinePanelFieldHtml("steps", "FaceRefine steps", "步数", `<input type="number" data-w="face_refine_steps" min="1" max="50" step="1">`),
+        refinePanelFieldHtml("paste", "FaceRefine paste", "贴回区域", `<select data-w="face_refine_paste_region"><option value="face_only">face_only</option><option value="face_ellipse">face_ellipse</option><option value="full_crop">full_crop</option></select>`),
+    ].join("");
+    bar.after(panel);
+    editor.faceRefineBarEl = wrap;
+    editor.faceRefinePanelEl = panel;
+    const sync = () => {
+        const detector = panel.querySelector(`[data-w="face_refine_detector"]`);
+        const detectorWidget = node.widgets?.find((x) => x.name === "face_refine_detector");
+        const detectorValue = String(detectorWidget?.value || "face_yolov8m.pt");
+        const detectorValues = detectorWidget?.options?.values?.length
+            ? detectorWidget.options.values
+            : [detectorValue];
+        fillModelSelect(detector, detectorValues, detectorValue);
+        for (const el of panel.querySelectorAll("[data-w]")) {
+            const w = node.widgets?.find((x) => x.name === el.getAttribute("data-w"));
+            if (w && el.type === "select-one" && w.options?.values?.length && el.getAttribute("data-w") !== "face_refine_detector") {
+                fillModelSelect(el, w.options.values, w.value);
+            }
+            if (!w) continue;
+            if (el.type === "checkbox") el.checked = isTruthyFlag(w.value);
+            else if (w.value != null) el.value = w.value;
+        }
+        wrap.querySelector("button")?.classList.toggle("active", isTruthyFlag(node.widgets?.find((x) => x.name === "face_refine_enable")?.value));
+    };
+    wrap.querySelector("[data-r=face-refine-cfg]").addEventListener("click", () => {
+        const next = !editor._mmxFaceRefinePanelOpen;
+        closePassPanels(editor, next ? "face" : "");
+        editor._mmxFaceRefinePanelOpen = next;
+        panel.classList.toggle("hidden", !next);
+        const after = () => { sync(); editor.resizeNodeForContentMinChange?.(); };
+        if (next) refreshDrawerModelSelects(editor).finally(after);
+        else after();
+    });
+    refreshDrawerModelSelects(editor).finally(sync);
+    panel.addEventListener("change", (event) => {
+        const el = event.target?.closest?.("[data-w]");
+        if (!el) return;
+        const w = node.widgets?.find((x) => x.name === el.getAttribute("data-w"));
+        if (!w) return;
+        w.value = el.type === "checkbox" ? String(!!el.checked) : el.type === "number" ? Number(el.value) : el.value;
+        w.callback?.(w.value);
+        node.setDirtyCanvas?.(true, true);
+        sync();
+    });
+    sync();
+}
+
 
 export function mountDirectorSamplePanel(editor) {
     const node = editor?.node;
@@ -627,15 +889,12 @@ export function mountDirectorRefinePanel(editor) {
     panel.className = "bd-refine-panel hidden";
     panel.setAttribute("data-r", "refine-panel");
     panel.innerHTML = [
+        `<div class="bd-refine-group">二采采样</div>`,
         `<label class="bd-refine-field row">`
             + `<input type="checkbox" data-r="refine-enable">`
             + `<span data-i18n="widget.refineEnable">${t("widget.refineEnable")}</span></label>`,
         refinePanelFieldHtml("mode", "widget.refineMode", "模式",
             `<select data-w="refine_mode">${optionHtml(modeVals, widgetValue(widgetByName(node, "refine_mode")))}</select>`),
-        refinePanelFieldHtml("method", "widget.refineUpscaleMethod", "放大方式",
-            `<select data-w="refine_upscale_method">${optionHtml(methodVals, widgetValue(widgetByName(node, "refine_upscale_method")))}</select>`),
-        refinePanelFieldHtml("h3model", "widget.refineLatentModel", "H3 latent 放大",
-            `<select data-w="refine_latent_upscale_model">${optionHtml(latentVals, widgetValue(widgetByName(node, "refine_latent_upscale_model")))}</select>`),
         refinePanelFieldHtml("sampler", "widget.refineSampler", "二采采样器",
             `<select data-w="refine_sampler">${optionHtml(samplerVals, widgetValue(widgetByName(node, "refine_sampler")))}</select>`),
         refinePanelFieldHtml("passes", "widget.refinePasses", "精修次数",
@@ -646,16 +905,10 @@ export function mountDirectorRefinePanel(editor) {
             `<select data-w="refine_scheduler">${optionHtml(schedulerVals, widgetValue(widgetByName(node, "refine_scheduler")))}</select>`),
         refinePanelFieldHtml("denoise", "widget.refineDenoise", "二采 denoise",
             `<input type="number" data-w="refine_denoise" min="0" max="1" step="0.01">`),
-        refinePanelFieldHtml("extra", "widget.refineExtraSteps", "低噪加步",
-            `<input type="number" data-w="refine_extra_steps" min="0" max="15" step="1">`),
-        refinePanelFieldHtml("extra-start", "widget.refineStartAtSigma", "加步起始 sigma",
-            `<input type="number" data-w="refine_start_at_sigma" min="0" max="20" step="0.01">`),
-        refinePanelFieldHtml("extra-end", "widget.refineEndAtSigma", "加步结束 sigma",
-            `<input type="number" data-w="refine_end_at_sigma" min="0" max="5" step="0.01">`),
-        refinePanelFieldHtml("extra-curve", "widget.refineSpacing", "加步曲线",
-            `<select data-w="refine_spacing">${optionHtml(spacingVals, widgetValue(widgetByName(node, "refine_spacing")))}</select>`),
         refinePanelFieldHtml("seed", "widget.refineSeedMode", "种子模式",
             `<select data-w="refine_seed_mode">${optionHtml(seedVals, widgetValue(widgetByName(node, "refine_seed_mode")))}</select>`),
+        `<label class="bd-refine-field row" data-show="skip"><input type="checkbox" data-w="refine_skip_fl2v"><span data-i18n="widget.refineSkipFl2v">跳过 fl2v</span></label>`,
+        `<div class="bd-refine-group" data-show="canvas-section">画幅</div>`,
         refinePanelFieldHtml("aspect", "widget.refineAspectRatio", "比例",
             `<select data-w="refine_aspect_ratio">${optionHtml(aspectVals, widgetValue(widgetByName(node, "refine_aspect_ratio")) || FOLLOW_DIRECTOR_ASPECT)}</select>`),
         refinePanelFieldHtml("mp", "widget.refineMegapixels", "百万像素",
@@ -664,8 +917,21 @@ export function mountDirectorRefinePanel(editor) {
             `<input type="number" data-w="refine_width" min="0" max="8192" step="32">`),
         refinePanelFieldHtml("height", "widget.refineHeight", "高",
             `<input type="number" data-w="refine_height" min="0" max="8192" step="32">`),
-        `<label class="bd-refine-field row" data-show="skip"><input type="checkbox" data-w="refine_skip_fl2v"><span data-i18n="widget.refineSkipFl2v">跳过 fl2v</span></label>`,
-        `<div class="bd-refine-divider" data-show="tile-section"></div>`,
+        `<div class="bd-refine-group" data-show="upscale-section">放大</div>`,
+        refinePanelFieldHtml("method", "widget.refineUpscaleMethod", "放大方式",
+            `<select data-w="refine_upscale_method">${optionHtml(methodVals, widgetValue(widgetByName(node, "refine_upscale_method")))}</select>`),
+        refinePanelFieldHtml("h3model", "widget.refineLatentModel", "H3 latent 放大",
+            `<select data-w="refine_latent_upscale_model">${optionHtml(latentVals, widgetValue(widgetByName(node, "refine_latent_upscale_model")))}</select>`),
+        `<div class="bd-refine-group" data-show="extra-section">低噪加步</div>`,
+        refinePanelFieldHtml("extra", "widget.refineExtraSteps", "低噪加步",
+            `<input type="number" data-w="refine_extra_steps" min="0" max="15" step="1">`),
+        refinePanelFieldHtml("extra-start", "widget.refineStartAtSigma", "加步起始 sigma",
+            `<input type="number" data-w="refine_start_at_sigma" min="0" max="20" step="0.01">`),
+        refinePanelFieldHtml("extra-end", "widget.refineEndAtSigma", "加步结束 sigma",
+            `<input type="number" data-w="refine_end_at_sigma" min="0" max="5" step="0.01">`),
+        refinePanelFieldHtml("extra-curve", "widget.refineSpacing", "加步曲线",
+            `<select data-w="refine_spacing">${optionHtml(spacingVals, widgetValue(widgetByName(node, "refine_spacing")))}</select>`),
+        `<div class="bd-refine-group" data-show="tile-section">分块</div>`,
         `<label class="bd-refine-field row" data-show="tile"><input type="checkbox" data-w="refine_tile"><span data-i18n="widget.refineTile">分块</span></label>`,
         refinePanelFieldHtml("tiles", "widget.refineNTiles", "分块数",
             `<input type="number" data-w="refine_n_tiles" min="1" max="8" step="1">`),
@@ -702,9 +968,14 @@ export function mountDirectorRefinePanel(editor) {
         const next = !editor._mmxRefinePanelOpen;
         closePassPanels(editor, next ? "refine" : "");
         editor._mmxRefinePanelOpen = next;
-        updateRefinePanelVisibility(editor);
-        editor.resizeNodeForContentMinChange?.();
+        const after = () => {
+            updateRefinePanelVisibility(editor);
+            editor.resizeNodeForContentMinChange?.();
+        };
+        if (next) refreshDrawerModelSelects(editor).finally(after);
+        else after();
     });
+    refreshDrawerModelSelects(editor);
     panel.addEventListener("change", (e) => {
         const el = e.target?.closest?.("[data-w]");
         if (!el) return;
@@ -802,6 +1073,9 @@ function updateRefinePanelVisibility(editor) {
         width: needsCanvas && custom,
         height: needsCanvas && custom,
         skip: true,
+        "canvas-section": needsCanvas,
+        "upscale-section": needsCanvas,
+        "extra-section": !latentOnly,
         "tile-section": !latentOnly,
         tile: !latentOnly,
         tiles: tileOn,

@@ -7,3 +7,7 @@ imageio-ffmpeg>=0.4
 # Optional: Refine upscale_method=nvidia_rtx_vsr (NVIDIA RTX GPU only).
 # Do not add as a hard dep — AMD / cloud / no-VSR installs would break.
 # pip install nvidia-vfx --extra-index-url https://pypi.nvidia.com
+
+# Optional: FaceRefine face detector. Required only when the Director
+# FaceRefine drawer is enabled; keep optional so normal installs stay light.
+# pip install ultralytics

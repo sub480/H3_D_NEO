@@ -269,3 +269,63 @@ def director_refine_widget_inputs() -> dict:
             },
         ),
     }
+
+
+def director_selflift_widget_inputs() -> dict:
+    """Built-in SelfLift drawer widgets; no external node or link is required."""
+    try:
+        from ..director.h3_latent_upscale import list_h3_latent_upscale_models
+        model_choices = list_h3_latent_upscale_models()
+    except Exception:
+        model_choices = []
+    return {
+        "bd_grp_selflift": ("BDGROUP", {"default": "SelfLift 首采"}),
+        # These hidden widgets are strings intentionally: older workflows restore
+        # optional widgets by array index and can place a neighbouring combo value
+        # into a numeric slot. The visible drawer validates/parses the values.
+        "selflift_enable": ("STRING", {"default": "false", "tooltip": "启用 SelfLift：低清首采、3D latent 提升、高清收尾。"}),
+        "selflift_split_mode": ("STRING", {"default": "highres_steps"}),
+        "selflift_highres_steps": ("STRING", {"default": "2"}),
+        "selflift_transition_step": ("STRING", {"default": "6"}),
+        "selflift_lowres_scale": ("STRING", {"default": "0.5"}),
+        "selflift_latent_upscale_model": ("STRING", {"default": model_choices[0] if model_choices else ""}),
+        "selflift_native_low_carry": ("STRING", {"default": "true"}),
+        "selflift_sampler_mode": ("STRING", {"default": "euler"}),
+        "selflift_rho": ("STRING", {"default": "0.0"}),
+        "selflift_w_min": ("STRING", {"default": "0.5"}),
+        "selflift_w_max": ("STRING", {"default": "1.0"}),
+        "selflift_latent_upsample": ("STRING", {"default": "bilinear"}),
+        "selflift_enable_latent_chunking": ("STRING", {"default": "false"}),
+        "selflift_enable_tiling": ("STRING", {"default": "false"}),
+        "selflift_tile_count": ("STRING", {"default": "2"}),
+        "selflift_tile_overlap": ("STRING", {"default": "128"}),
+    }
+
+
+def director_face_refine_widget_inputs() -> dict:
+    """Built-in FaceRefine drawer widgets; no external node or link is required."""
+    from ..director.face_refine.pack import default_detector_choice
+    return {
+        "bd_grp_face_refine": ("BDGROUP", {"default": "FaceRefine 修脸"}),
+        "face_refine_enable": ("STRING", {"default": "false", "tooltip": "启用 FaceRefine：检测人脸、局部重采并贴回最终画面。"}),
+        "face_refine_detector": ("STRING", {"default": default_detector_choice()}),
+        "face_refine_confidence": ("STRING", {"default": "0.35"}),
+        "face_refine_crop_factor": ("STRING", {"default": "2.5"}),
+        "face_refine_canvas_width": ("STRING", {"default": "768"}),
+        "face_refine_canvas_height": ("STRING", {"default": "768"}),
+        "face_refine_canvas_mode": ("STRING", {"default": "manual"}),
+        "face_refine_select": ("STRING", {"default": "largest_face"}),
+        "face_refine_denoise": ("STRING", {"default": "0.40"}),
+        "face_refine_steps": ("STRING", {"default": "8"}),
+        "face_refine_sampler": ("STRING", {"default": "euler"}),
+        "face_refine_scheduler": ("STRING", {"default": "simple"}),
+        "face_refine_seed_mode": ("STRING", {"default": "inherit"}),
+        "face_refine_paste_region": ("STRING", {"default": "face_only"}),
+        "face_refine_mask_dilation": ("STRING", {"default": "16"}),
+        "face_refine_feather": ("STRING", {"default": "24"}),
+        "face_refine_colour_match": ("STRING", {"default": "1.0"}),
+        "face_refine_blend": ("STRING", {"default": "1.0"}),
+        "clear_vram_before_face_refine": ("STRING", {"default": "false", "tooltip": "一采/二采完成后，在 FaceRefine 前卸载显存中的采样模型。"}),
+        "clear_vram_before_refine": ("STRING", {"default": "false", "tooltip": "一采结束、二采开始前卸载模型并清理显存。"}),
+        "export_pre_face_refine": ("BOOLEAN", {"default": False, "tooltip": "额外输出修脸前画面，便于和最终 images 对比。"}),
+    }
