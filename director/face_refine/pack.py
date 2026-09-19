@@ -144,6 +144,7 @@ def pack_face_refine(
     feather: int = 24,
     colour_match: float = 1.0,
     blend: float = 1.0,
+    follow_director: bool = False,
     sigmas=None,
 ) -> dict[str, Any]:
     mode = str(canvas_mode or "manual").strip().lower()
@@ -188,6 +189,7 @@ def pack_face_refine(
         "feather": _clamp_int(feather, 0, 256, 24),
         "colour_match": _clamp_float(colour_match, 0.0, 1.0, 1.0),
         "blend": _clamp_float(blend, 0.0, 1.0, 1.0),
+        "follow_director": bool(follow_director),
         "sigmas": ",".join(f"{x:g}" for x in parsed),
         "sigmas_parsed": parsed,
         "sigmas_tensor": sigma_tensor,
@@ -219,6 +221,7 @@ def normalize_face_refine_pack(raw) -> dict[str, Any] | None:
         feather=raw.get("feather", 24),
         colour_match=raw.get("colour_match", 1.0),
         blend=raw.get("blend", 1.0),
+        follow_director=raw.get("follow_director", False),
         sigmas=raw.get("sigmas_tensor") if raw.get("sigmas_tensor") is not None else raw.get("sigmas"),
     )
 
@@ -248,6 +251,7 @@ def face_refine_fingerprint(plan) -> dict[str, Any]:
         "fr_dilation": int(pack.get("mask_dilation") or 0),
         "fr_colour": round(float(pack.get("colour_match") or 0), 4),
         "fr_blend": round(float(pack.get("blend") or 0), 4),
+        "fr_follow_director": bool(pack.get("follow_director")),
         "fr_sigmas": ",".join(f"{x:.4f}" for x in (pack.get("sigmas_parsed") or ())),
         # Bump when continuity seam fade lands so old unfaded stitch caches miss.
         "fr_seam_fade": 12,

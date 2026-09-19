@@ -3061,8 +3061,8 @@ class H3_D_NEOEditor {
         this.mainBody.appendChild(outputBar);
         this.outputBarEl = outputBar;
         mountDirectorSamplePanel(this);
-        mountDirectorRefinePanel(this);
         mountDirectorSelfLiftPanel(this);
+        mountDirectorRefinePanel(this);
         mountDirectorFaceRefinePanel(this);
         const continuityPanel = document.createElement("div");
         continuityPanel.className = "bd-refine-panel bd-continuity-panel hidden";

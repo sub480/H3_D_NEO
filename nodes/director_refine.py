@@ -325,6 +325,7 @@ def director_face_refine_widget_inputs() -> dict:
         "face_refine_feather": ("STRING", {"default": "24"}),
         "face_refine_colour_match": ("STRING", {"default": "1.0"}),
         "face_refine_blend": ("STRING", {"default": "1.0"}),
+        "face_refine_follow_director": ("STRING", {"default": "false", "tooltip": "让 FaceRefine 使用导演台一采的步数、采样器和调度器。"}),
         "clear_vram_before_face_refine": ("STRING", {"default": "false", "tooltip": "一采/二采完成后，在 FaceRefine 前卸载显存中的采样模型。"}),
         "clear_vram_before_refine": ("STRING", {"default": "false", "tooltip": "一采结束、二采开始前卸载模型并清理显存。"}),
         "export_pre_face_refine": ("BOOLEAN", {"default": False, "tooltip": "额外输出修脸前画面，便于和最终 images 对比。"}),

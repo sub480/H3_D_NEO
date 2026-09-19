@@ -632,6 +632,7 @@ async def minimax_first_pass_cache_status(request):
                 enable_tiling=_flag(body.get("selflift_enable_tiling")),
                 tile_count=body.get("selflift_tile_count", 2),
                 tile_overlap=body.get("selflift_tile_overlap", 128),
+                has_sample_model=_flag(body.get("selflift_model_hires")),
             )
         raw_cache_index = body.get("cache_index")
         cache_index = int(raw_cache_index) if raw_cache_index is not None else None

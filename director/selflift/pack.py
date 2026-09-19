@@ -43,6 +43,15 @@ def _clamp_float(raw, default: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, n))
 
 
+def _is_hires_model(value) -> bool:
+    """True only for a connected MODEL object, not leftover widget strings."""
+    if value is None or value is False:
+        return False
+    if isinstance(value, (str, bytes, int, float, bool)):
+        return False
+    return True
+
+
 def pack_selflift(
     *,
     split_mode: str = "highres_steps",
@@ -61,6 +70,7 @@ def pack_selflift(
     tile_count: int = DEFAULT_SPATIAL_TILES,
     tile_overlap: int = DEFAULT_TILE_OVERLAP,
     model_hires=None,
+    has_sample_model=None,
 ) -> dict[str, Any]:
     mode = str(split_mode or "highres_steps").strip().lower()
     if mode not in SPLIT_MODES:
@@ -76,6 +86,11 @@ def pack_selflift(
     if w_hi < w_lo:
         w_lo, w_hi = w_hi, w_lo
     latent_mod, latent_name = resolve_latent_upscale_ref(latent_upscale_model)
+    has_model = (
+        bool(has_sample_model)
+        if has_sample_model is not None
+        else _is_hires_model(model_hires)
+    )
     return {
         "enabled": True,
         "split_mode": mode,
@@ -94,7 +109,8 @@ def pack_selflift(
         "tile_overlap": _clamp_int(tile_overlap, DEFAULT_TILE_OVERLAP, 0, 2048),
         "latent_upscale_ref": latent_mod,
         "h3_latent_model": latent_name,
-        "sample_model": model_hires,
+        "sample_model": model_hires if has_model else None,
+        "has_sample_model": has_model,
     }
 
 
@@ -126,6 +142,7 @@ def normalize_selflift_pack(raw) -> dict[str, Any] | None:
         tile_count=raw.get("tile_count", DEFAULT_SPATIAL_TILES),
         tile_overlap=raw.get("tile_overlap", DEFAULT_TILE_OVERLAP),
         model_hires=raw.get("sample_model"),
+        has_sample_model=raw.get("has_sample_model"),
     )
 
 
@@ -190,7 +207,9 @@ def selflift_fingerprint(plan) -> dict[str, Any]:
         "sl_tile": bool(pack.get("enable_tiling")),
         "sl_tiles": int(pack.get("tile_count") or 0),
         "sl_overlap": int(pack.get("tile_overlap") or 0),
-        "sl_hires_model": bool(pack.get("sample_model") is not None),
+        "sl_hires_model": bool(
+            pack.get("has_sample_model") or _is_hires_model(pack.get("sample_model"))
+        ),
     }
 
 

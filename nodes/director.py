@@ -224,15 +224,6 @@ class H3_D_NEO:
                         ),
                     },
                 ),
-                "upscale_model": (
-                    "UPSCALE_MODEL",
-                    {
-                        "tooltip": (
-                            "可选像素放大模型（RealESRGAN 等）。"
-                            "仅 mode=upscale 且 upscale_method=lanczos 时使用。"
-                        ),
-                    },
-                ),
                 "bd_grp_advanced": ("BDGROUP", {"default": "高级采样"}),
                 "steps": (
                     "INT",
@@ -385,6 +376,8 @@ class H3_D_NEO:
             "feather": kwargs.get("face_refine_feather"),
             "colour_match": kwargs.get("face_refine_colour_match"),
             "blend": kwargs.get("face_refine_blend"),
+            "follow_director": _widget_bool(kwargs.get("face_refine_follow_director", False)),
+            "sigmas": kwargs.get("face_refine_sigmas"),
         }
         clear_vram_before_face_refine = _widget_bool(kwargs.get("clear_vram_before_face_refine", False))
         clear_vram_before_refine = _widget_bool(kwargs.get("clear_vram_before_refine", False))
@@ -397,6 +390,7 @@ class H3_D_NEO:
                 highres_steps=kwargs.get("selflift_highres_steps", 2),
                 transition_step=kwargs.get("selflift_transition_step", 6),
                 lowres_scale=kwargs.get("selflift_lowres_scale", 0.5),
+                model_hires=kwargs.get("selflift_model_hires"),
                 latent_upscale_model=kwargs.get("selflift_latent_upscale_model"),
                 sampler_mode=kwargs.get("selflift_sampler_mode", "euler"),
                 native_low_carry=_widget_bool(kwargs.get("selflift_native_low_carry"), True),

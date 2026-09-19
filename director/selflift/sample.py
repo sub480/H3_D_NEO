@@ -216,7 +216,12 @@ def sample_selflift_stage(
             on_phase(phase, value)
 
     sampler_use = require_euler(sampler_name, pack)
-    high_model = pack.get("sample_model") if pack.get("sample_model") is not None else model
+    from .pack import _is_hires_model
+    high_model = (
+        pack.get("sample_model")
+        if pack.get("has_sample_model") or _is_hires_model(pack.get("sample_model"))
+        else model
+    )
 
     # Resolve canvas from the (already pinned) high-res latent when unset.
     size = av_pixel_size(latent)

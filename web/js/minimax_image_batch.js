@@ -199,7 +199,7 @@ function resolveSegmentDurationSec(seg) {
     return defaultDurationSec(resolveTaskKey(seg.taskType || ""));
 }
 
-function resolveVideoSegmentDuration(taskKey, seg, rawSec = resolveSegmentDurationSec(seg), { enforceSourceFrames = true } = {}) {
+function resolveVideoSegmentDuration(taskKey, seg, rawSec = resolveSegmentDurationSec(seg), { enforceSourceFrames = false } = {}) {
     const segTaskKey = taskKey === "mixed" ? resolveMixedGroupKey(seg) : taskKey;
     const heldImage = seg.sourceVideo?.mediaKind === "image";
     const sourceFrames = ["v2v", "rv2v"].includes(segTaskKey)
@@ -799,6 +799,9 @@ function syncSegmentDurationFromSource(editor, index) {
     if (!live || count <= 0) return false;
     const updated = applyBatchSegmentDuration(editor, index, preferredDurationSecFromFrames(count, 24));
     if (!updated) return false;
+    // flushTimelineSync reads the visible 秒数 input. Update it first so the
+    // old typed value cannot overwrite the range sync.
+    syncSourceRangeDurationInput(editor, updated, index, updated.frameCount);
     editor.commit?.(false, { syncTimeline: true });
     editor.flushTimelineSync?.();
     editor.updateVideoNameLabel?.();
@@ -1233,6 +1236,21 @@ function sourceVideoFrameMap(sourceVideo) {
     return frameMap.slice(start, alignedEnd);
 }
 
+function resizeSourceRangeToFrameCount(sourceVideo, frameCount) {
+    const source = sourceVideo;
+    if (!source || typeof source !== "object") return false;
+    const total = sourceVideoFullFrameMap(source).length;
+    if (total <= 0) return false;
+    const start = Math.max(0, Math.min(total - 1, Math.round(Number(source.rangeStart) || 0)));
+    const requested = Math.max(5, Math.round(Number(frameCount) || 5));
+    const end = Math.min(total, start + requested);
+    const alignedEnd = start + floorMiniMaxFrameCount(end - start);
+    if (alignedEnd <= start) return false;
+    source.rangeStart = start;
+    source.rangeEnd = alignedEnd;
+    return true;
+}
+
 function appendSourceVideoResolutionControl(container, editor, seg, { showTitle = true } = {}) {
     const head = document.createElement("div");
     head.className = "bd-batch-source-video-head";
@@ -1317,7 +1335,6 @@ function syncSourceRangeDurationInput(editor, seg, index, frameCount) {
         const sameIndex = Number(input.getAttribute("data-batch-sec-index")) === index;
         if (!sameId && !sameIndex) continue;
         input.value = String(durationSec);
-        input.min = String(durationSec);
         input.title = t("batch.videoEditDurationTooltip", { frames: frameCount, play: playSec });
         break;
     }
@@ -3013,11 +3030,15 @@ export function applyDirectorRefinePassDefaults(editor, enabled) {
     }
 }
 
-function directorHasSigmasLink(node) {
-    const inp = (node?.inputs || []).find((item) => String(item?.name) === "sigmas");
+function directorHasInputLink(node, name) {
+    const inp = (node?.inputs || []).find((item) => String(item?.name) === String(name));
     if (!inp) return false;
     if (inp.link != null) return true;
     return Array.isArray(inp.links) && inp.links.length > 0;
+}
+
+function directorHasSigmasLink(node) {
+    return directorHasInputLink(node, "sigmas");
 }
 
 function _selfliftDrawerEl(editor, name) {
@@ -3088,6 +3109,7 @@ function passCachePayload(editor, index) {
         selflift_enable_tiling: _selfliftCacheFlag(editor, "selflift_enable_tiling"),
         selflift_tile_count: _selfliftCacheValue(editor, "selflift_tile_count", "2"),
         selflift_tile_overlap: _selfliftCacheValue(editor, "selflift_tile_overlap", "128"),
+        selflift_model_hires: directorHasInputLink(node, "selflift_model_hires"),
     };
     if (r2vLoraTriggerIsLinked(editor)) {
         payload.lora_trigger_words_r2v = readLoraTriggerWords(editor, "lora_trigger_words_r2v");
@@ -3801,9 +3823,7 @@ function appendBatchCard(list, editor, seg, index, ctx) {
                 && !!seg.sourceVideo?.image?.imageFile;
             const hasSourceMedia = sourceFrames > 0 || hasHeldImage;
             const displayedSec = isVideoEdit && !hasSourceMedia ? 0 : seg.durationSec;
-            const minSec = isVideoEdit && sourceFrames > 0
-                ? preferredDurationSecFromFrames(sourceFrames, 24)
-                : minDurationSec();
+            const minSec = minDurationSec();
             const durationTitle = t(
                 hasHeldImage
                     ? "batch.heldImageDurationTooltip"
@@ -3826,6 +3846,13 @@ function appendBatchCard(list, editor, seg, index, ctx) {
             let secFocused = false;
             secInput.addEventListener("focus", () => { secFocused = true; });
             const applySec = () => {
+                if (isVideoEdit) {
+                    const requested = durationToClampedMiniMaxFrames(Number(secInput.value), 24);
+                    resizeSourceRangeToFrameCount(
+                        editor.timeline.segments?.[index]?.sourceVideo,
+                        requested.frames,
+                    );
+                }
                 const updated = applyBatchSegmentDuration(editor, index, secInput.value);
                 if (!updated) return;
                 if (!secFocused) {
@@ -3838,6 +3865,7 @@ function appendBatchCard(list, editor, seg, index, ctx) {
                 }
                 editor.scheduleTimelineSync();
                 editor.scheduleRender?.();
+                if (!secFocused) editor.renderImageBatchGroups?.();
                 editor.updateVideoNameLabel?.();
                 editor.updateOutputPreview?.();
                 // Keep total_frames widget in sync with sum of group frames.

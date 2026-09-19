@@ -114,6 +114,10 @@ def apply_segment_face_refine(
     fr_seed = int(seed)
     if str(pack.get("seed_mode") or "inherit") == "offset":
         fr_seed = int(seed) + 1 + int(getattr(seg, "index", 0) or 0)
+    follow_director = bool(pack.get("follow_director"))
+    fr_steps = int(getattr(plan, "sample_steps", 25) or 25) if follow_director else int(pack.get("steps") or 8)
+    fr_sampler = str(getattr(plan, "sample_sampler", "") or "euler") if follow_director else str(pack.get("sampler") or "euler")
+    fr_scheduler = str(getattr(plan, "sample_scheduler", "") or "simple") if follow_director else str(pack.get("scheduler") or "simple")
     sampled = sample_single_stage(
         model=model,
         positive=positive,
@@ -121,9 +125,9 @@ def apply_segment_face_refine(
         latent=latent,
         seed=fr_seed,
         cfg=float(cfg),
-        steps=int(pack.get("steps") or 8),
-        sampler_name=str(pack.get("sampler") or "euler"),
-        scheduler=str(pack.get("scheduler") or "simple"),
+        steps=fr_steps,
+        sampler_name=fr_sampler,
+        scheduler=fr_scheduler,
         shift_video=float(shift_video),
         shift_audio=float(shift_audio),
         denoise=float(pack.get("denoise") or 0.40),
