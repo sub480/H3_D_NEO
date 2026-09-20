@@ -175,6 +175,7 @@ def prepare_director_plan(
     unique_id: str | None,
     director_prompt=None,
     selflift=None,
+    semantic_bridge=None,
     face_refine=None,
     refine=None,
     lora_trigger_words=None,
@@ -210,6 +211,8 @@ def prepare_director_plan(
     )
     from ..director.selflift.pack import normalize_selflift_pack
     plan.selflift = normalize_selflift_pack(selflift)
+    from ..director.semantic_bridge import normalize_semantic_bridge_pack
+    plan.semantic_bridge = normalize_semantic_bridge_pack(semantic_bridge)
     from ..director.face_refine.pack import normalize_face_refine_pack
     plan.face_refine = normalize_face_refine_pack(face_refine)
     plan = _attach_refine(plan, refine)

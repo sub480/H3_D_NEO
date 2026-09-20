@@ -3110,6 +3110,10 @@ function passCachePayload(editor, index) {
         selflift_tile_count: _selfliftCacheValue(editor, "selflift_tile_count", "2"),
         selflift_tile_overlap: _selfliftCacheValue(editor, "selflift_tile_overlap", "128"),
         selflift_model_hires: directorHasInputLink(node, "selflift_model_hires"),
+        semantic_bridge_enable: _selfliftCacheFlag(editor, "semantic_bridge_enable"),
+        semantic_bridge_adapter: _selfliftCacheValue(editor, "semantic_bridge_adapter", ""),
+        semantic_bridge_alpha: _selfliftCacheValue(editor, "semantic_bridge_alpha", "0.15"),
+        semantic_bridge_magnitude_match: _selfliftCacheFlag(editor, "semantic_bridge_magnitude_match", true),
     };
     if (r2vLoraTriggerIsLinked(editor)) {
         payload.lora_trigger_words_r2v = readLoraTriggerWords(editor, "lora_trigger_words_r2v");

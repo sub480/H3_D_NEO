@@ -302,6 +302,22 @@ def director_selflift_widget_inputs() -> dict:
     }
 
 
+def director_semantic_bridge_widget_inputs() -> dict:
+    """Built-in Semantic Bridge drawer widgets."""
+    try:
+        from ..director.semantic_bridge import list_semantic_bridge_adapters
+        adapters = list_semantic_bridge_adapters()
+    except Exception:
+        adapters = [""]
+    return {
+        "bd_grp_semantic_bridge": ("BDGROUP", {"default": "Semantic Bridge 语义增强"}),
+        "semantic_bridge_enable": ("STRING", {"default": "false", "tooltip": "启用 Semantic Bridge：重写一采 conditioning token。"}),
+        "semantic_bridge_adapter": ("STRING", {"default": adapters[0] if adapters else ""}),
+        "semantic_bridge_alpha": ("STRING", {"default": "0.15"}),
+        "semantic_bridge_magnitude_match": ("STRING", {"default": "true"}),
+    }
+
+
 def director_face_refine_widget_inputs() -> dict:
     """Built-in FaceRefine drawer widgets; no external node or link is required."""
     from ..director.face_refine.pack import default_detector_choice

@@ -821,6 +821,11 @@ def execute_director_plan_core(
             ref_image_size=official_ref_image_size(resolve_ref_image_size(seg, plan)),
         )
 
+        from .semantic_bridge import apply_semantic_bridge
+        positive, sb_note = apply_semantic_bridge(positive, plan, task_key=seg.task_key)
+        if sb_note:
+            log.info("MiniMax H3 Director: %s", sb_note)
+
         trim_frames = 0
         after_shift = None
         if use_motion_context:

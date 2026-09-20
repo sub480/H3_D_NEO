@@ -19,6 +19,7 @@ from .director_refine import (
     director_face_refine_widget_inputs,
     director_refine_widget_inputs,
     director_selflift_widget_inputs,
+    director_semantic_bridge_widget_inputs,
 )
 
 _CATEGORY = "H3_D_NEO"
@@ -269,6 +270,7 @@ class H3_D_NEO:
                 **director_perf_inputs(),
                 **director_refine_widget_inputs(),
                 **director_selflift_widget_inputs(),
+                **director_semantic_bridge_widget_inputs(),
                 **director_face_refine_widget_inputs(),
             },
             "hidden": {"unique_id": "UNIQUE_ID"},
@@ -382,6 +384,14 @@ class H3_D_NEO:
         clear_vram_before_face_refine = _widget_bool(kwargs.get("clear_vram_before_face_refine", False))
         clear_vram_before_refine = _widget_bool(kwargs.get("clear_vram_before_refine", False))
         export_pre_face_refine = _widget_bool(kwargs.get("export_pre_face_refine", False))
+        semantic_bridge_pack = None
+        if _widget_bool(kwargs.get("semantic_bridge_enable", False)):
+            from ..director.semantic_bridge import pack_semantic_bridge
+            semantic_bridge_pack = pack_semantic_bridge(
+                adapter=kwargs.get("semantic_bridge_adapter", ""),
+                alpha=kwargs.get("semantic_bridge_alpha", 0.15),
+                magnitude_match=_widget_bool(kwargs.get("semantic_bridge_magnitude_match"), True),
+            )
         selflift = None
         if _widget_bool(kwargs.get("selflift_enable", False)):
             from ..director.selflift.pack import pack_selflift
@@ -424,6 +434,7 @@ class H3_D_NEO:
             unique_id=unique_id,
             director_prompt=director_prompt,
             selflift=selflift,
+            semantic_bridge=semantic_bridge_pack,
             face_refine=face_refine,
             refine=refine,
             lora_trigger_words=lora_trigger_words,

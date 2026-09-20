@@ -530,6 +530,7 @@ async def minimax_list_drawer_models(request):
     try:
         from .face_refine.pack import detector_choices
         from .h3_latent_upscale import MISSING_MODEL_LABEL, list_h3_latent_upscale_models
+        from .semantic_bridge import list_semantic_bridge_adapters
 
         models = [
             name for name in list_h3_latent_upscale_models()
@@ -538,6 +539,7 @@ async def minimax_list_drawer_models(request):
         return web.json_response({
             "detectors": detector_choices(),
             "latent_upscale_models": models,
+            "semantic_bridge_adapters": [name for name in list_semantic_bridge_adapters() if not name.startswith("(")],
         })
     except Exception as exc:
         log.warning("MiniMax H3 Director list drawer models failed: %s", exc)
@@ -614,6 +616,14 @@ async def minimax_first_pass_cache_status(request):
                 return default
             text = str(value).strip().lower()
             return text in {"1", "true", "on", "yes"}
+
+        from .semantic_bridge import pack_semantic_bridge
+        if _flag(body.get("semantic_bridge_enable")):
+            plan.semantic_bridge = pack_semantic_bridge(
+                adapter=body.get("semantic_bridge_adapter", ""),
+                alpha=body.get("semantic_bridge_alpha", 0.15),
+                magnitude_match=_flag(body.get("semantic_bridge_magnitude_match"), True),
+            )
 
         if _flag(body.get("selflift_enable")):
             plan.selflift = pack_selflift(

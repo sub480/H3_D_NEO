@@ -264,6 +264,8 @@ def first_pass_cache_fingerprint(seg: SegmentPlan, plan: DirectorPlan) -> dict[s
             fp["continuity_predecessor"] = first_pass_cache_fingerprint(previous, plan)
     from .selflift.pack import selflift_fingerprint
     fp.update(selflift_fingerprint(plan))
+    from .semantic_bridge import semantic_bridge_fingerprint
+    fp.update(semantic_bridge_fingerprint(plan))
     return fp
 
 
@@ -281,6 +283,8 @@ def segment_cache_fingerprint(seg: SegmentPlan, plan: DirectorPlan) -> dict[str,
     fp.update(face_refine_fingerprint(plan))
     from .selflift.pack import selflift_fingerprint
     fp.update(selflift_fingerprint(plan))
+    from .semantic_bridge import semantic_bridge_fingerprint
+    fp.update(semantic_bridge_fingerprint(plan))
     return fp
 
 

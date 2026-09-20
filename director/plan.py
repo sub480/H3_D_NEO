@@ -419,6 +419,7 @@ class DirectorPlan:
     audio_decode_cache: dict = field(default_factory=dict, repr=False)
     refine: dict | None = None
     selflift: dict | None = None
+    semantic_bridge: dict | None = None
     face_refine: dict | None = None
     # Sampling knobs stamped at execute time (first-pass cache fingerprint).
     sample_seed: int = 0
@@ -1214,6 +1215,13 @@ def plan_summary(plan: DirectorPlan) -> str:
         selflift_line = None
     if selflift_line:
         lines.append(selflift_line)
+    try:
+        from .semantic_bridge import semantic_bridge_report_line
+        semantic_line = semantic_bridge_report_line(plan)
+    except Exception:
+        semantic_line = None
+    if semantic_line:
+        lines.append(semantic_line)
     try:
         from .face_refine.pack import face_refine_report_line
         face_line = face_refine_report_line(plan)

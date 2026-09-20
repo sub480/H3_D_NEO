@@ -87,7 +87,7 @@ import {
     wireBatchRunSelectControls,
     wireMediaDuration,
 } from "./minimax_image_batch.js";
-import { closePassPanels, mountDirectorFaceRefinePanel, mountDirectorRefinePanel, mountDirectorSamplePanel, mountDirectorSelfLiftPanel } from "./minimax_refine.js";
+import { closePassPanels, mountDirectorFaceRefinePanel, mountDirectorRefinePanel, mountDirectorSamplePanel, mountDirectorSelfLiftPanel, mountDirectorSemanticBridgePanel } from "./minimax_refine.js";
 import {
     extractReferenceAudioFromExistingVideo,
     hasDuplicateReferenceAudio,
@@ -3062,6 +3062,7 @@ class H3_D_NEOEditor {
         this.outputBarEl = outputBar;
         mountDirectorSamplePanel(this);
         mountDirectorSelfLiftPanel(this);
+        mountDirectorSemanticBridgePanel(this);
         mountDirectorRefinePanel(this);
         mountDirectorFaceRefinePanel(this);
         const continuityPanel = document.createElement("div");

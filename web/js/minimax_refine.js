@@ -403,6 +403,11 @@ const DIRECTOR_REFINE_COMFY_WIDGETS = [
     "selflift_enable_tiling",
     "selflift_tile_count",
     "selflift_tile_overlap",
+    "bd_grp_semantic_bridge",
+    "semantic_bridge_enable",
+    "semantic_bridge_adapter",
+    "semantic_bridge_alpha",
+    "semantic_bridge_magnitude_match",
     "bd_grp_face_refine",
     "face_refine_enable",
     "face_refine_detector",
@@ -518,6 +523,10 @@ export function closePassPanels(editor, except) {
         editor._mmxFaceRefinePanelOpen = false;
         editor.faceRefinePanelEl?.classList.add("hidden");
     }
+    if (except !== "semantic") {
+        editor._mmxSemanticBridgePanelOpen = false;
+        editor.semanticBridgePanelEl?.classList.add("hidden");
+    }
     if (except !== "preview") {
         editor._mmxPreviewPanelOpen = false;
         editor.previewPanelEl?.classList.add("hidden");
@@ -571,9 +580,10 @@ function loadDrawerModels(force = false) {
                 return {
                     detectors: Array.isArray(data.detectors) ? data.detectors.map(normModelName).filter(Boolean) : [],
                     latent_upscale_models: Array.isArray(data.latent_upscale_models) ? data.latent_upscale_models.map(normModelName).filter(Boolean) : [],
+                    semantic_bridge_adapters: Array.isArray(data.semantic_bridge_adapters) ? data.semantic_bridge_adapters.map(normModelName).filter(Boolean) : [],
                 };
             })
-            .catch(() => ({ detectors: [], latent_upscale_models: [] }));
+            .catch(() => ({ detectors: [], latent_upscale_models: [], semantic_bridge_adapters: [] }));
     }
     return _drawerModelsPromise;
 }
@@ -591,6 +601,7 @@ function applyDrawerModelsToEditor(editor, data) {
         if (select) fillModelSelect(select, values, widget?.value);
     };
     apply("selflift_latent_upscale_model", data.latent_upscale_models, editor.selfLiftPanelEl?.querySelector(`[data-w="selflift_latent_upscale_model"]`));
+    apply("semantic_bridge_adapter", data.semantic_bridge_adapters || [], editor.semanticBridgePanelEl?.querySelector(`[data-w="semantic_bridge_adapter"]`));
     apply("face_refine_detector", data.detectors, editor.faceRefinePanelEl?.querySelector(`[data-w="face_refine_detector"]`));
     apply("refine_latent_upscale_model", data.latent_upscale_models, editor.refinePanelEl?.querySelector(`[data-w="refine_latent_upscale_model"]`));
 }
@@ -696,6 +707,62 @@ export function mountDirectorSelfLiftPanel(editor) {
         if (editor._mmxSelfLiftPanelOpen) editor.resizeNodeForContentMinChange?.();
     });
     sync();
+}
+
+export function mountDirectorSemanticBridgePanel(editor) {
+    const node = editor?.node;
+    const bar = editor?.outputBarEl;
+    if (!node || !bar || editor._mmxSemanticBridgePanelMounted) return;
+    editor._mmxSemanticBridgePanelMounted = true;
+    const wrap = document.createElement("span");
+    wrap.className = "bd-out-refine-wrap";
+    wrap.innerHTML = `<button type="button" class="bd-btn" data-r="semantic-bridge-cfg">Semantic Bridge</button>`;
+    const tools = bar.querySelector(".bd-live-preview-tools");
+    if (tools) bar.insertBefore(wrap, tools); else bar.appendChild(wrap);
+    const panel = document.createElement("div");
+    panel.className = "bd-refine-panel hidden";
+    panel.setAttribute("data-r", "semantic-bridge-panel");
+    panel.innerHTML = [
+        `<div class="bd-refine-group">Semantic Bridge 语义增强</div>`,
+        `<label class="bd-refine-field row"><input type="checkbox" data-w="semantic_bridge_enable"><span>启用 Semantic Bridge</span></label>`,
+        refinePanelFieldHtml("adapter", "Semantic Bridge adapter", "权重文件", `<select data-w="semantic_bridge_adapter"></select>`),
+        refinePanelFieldHtml("alpha", "Semantic Bridge alpha", "混合强度 alpha", `<input type="number" data-w="semantic_bridge_alpha" min="0" max="1" step="0.01">`),
+        `<label class="bd-refine-field row"><input type="checkbox" data-w="semantic_bridge_magnitude_match"><span>匹配向量模长</span></label>`,
+        `<div class="bd-refine-help">仅改写一采 conditioning token；未启用或未找到权重时保持原流程。</div>`,
+    ].join("");
+    applyFieldTooltips(panel, {
+        semantic_bridge_enable: "启用后对一采 conditioning token 应用 Semantic Bridge student MLP。",
+        adapter: "放在 ComfyUI/models/semantic_bridge/ 下的 .safetensors/.pt/.pth 权重。",
+        alpha: "残差混合强度，默认 0.15。",
+        semantic_bridge_magnitude_match: "将 student 输出的向量模长对齐到原 hidden。",
+    });
+    bar.after(panel); editor.semanticBridgeBarEl = wrap; editor.semanticBridgePanelEl = panel;
+    const sync = () => {
+        const select = panel.querySelector(`[data-w="semantic_bridge_adapter"]`);
+        const w = node.widgets?.find((x) => x.name === "semantic_bridge_adapter");
+        const values = w?.options?.values?.length ? w.options.values : (w?.value ? [w.value] : []);
+        if (select) fillModelSelect(select, values, w?.value);
+        for (const el of panel.querySelectorAll("[data-w]")) {
+            const item = node.widgets?.find((x) => x.name === el.getAttribute("data-w"));
+            if (!item) continue;
+            if (el.type === "checkbox") el.checked = isTruthyFlag(item.value); else if (item.value != null) el.value = item.value;
+        }
+        wrap.querySelector("button")?.classList.toggle("active", isTruthyFlag(node.widgets?.find((x) => x.name === "semantic_bridge_enable")?.value));
+    };
+    editor.syncSemanticBridgePanelFromWidgets = sync;
+    wrap.querySelector("[data-r=semantic-bridge-cfg]").addEventListener("click", () => {
+        const next = !editor._mmxSemanticBridgePanelOpen;
+        closePassPanels(editor, next ? "semantic" : "");
+        editor._mmxSemanticBridgePanelOpen = next; panel.classList.toggle("hidden", !next);
+        if (next) refreshDrawerModelSelects(editor).finally(() => { sync(); editor.resizeNodeForContentMinChange?.(); }); else sync();
+    });
+    refreshDrawerModelSelects(editor).finally(sync);
+    panel.addEventListener("change", (event) => {
+        const el = event.target?.closest?.("[data-w]"); if (!el) return;
+        const item = node.widgets?.find((x) => x.name === el.getAttribute("data-w")); if (!item) return;
+        item.value = el.type === "checkbox" ? String(!!el.checked) : el.type === "number" ? Number(el.value) : el.value;
+        item.callback?.(item.value); node.setDirtyCanvas?.(true, true); sync();
+    });
 }
 
 export function mountDirectorFaceRefinePanel(editor) {
@@ -954,7 +1021,10 @@ function syncDirectorBuiltinRefineWidgets(node) {
     if (!node || !DIRECTOR_CLASSES.has(node.comfyClass || node.type || "")) return;
     hideDirectorRefineComfyWidgets(node);
     const editor = node._minimaxEditor;
-    if (editor) syncRefinePanelFromWidgets(editor);
+    if (editor) {
+        syncRefinePanelFromWidgets(editor);
+        editor.syncSemanticBridgePanelFromWidgets?.();
+    }
 }
 
 function hookDirectorBuiltinRefine(node) {
