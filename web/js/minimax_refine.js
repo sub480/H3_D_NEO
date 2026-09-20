@@ -753,8 +753,11 @@ export function mountDirectorSemanticBridgePanel(editor) {
     wrap.querySelector("[data-r=semantic-bridge-cfg]").addEventListener("click", () => {
         const next = !editor._mmxSemanticBridgePanelOpen;
         closePassPanels(editor, next ? "semantic" : "");
-        editor._mmxSemanticBridgePanelOpen = next; panel.classList.toggle("hidden", !next);
-        if (next) refreshDrawerModelSelects(editor).finally(() => { sync(); editor.resizeNodeForContentMinChange?.(); }); else sync();
+        editor._mmxSemanticBridgePanelOpen = next;
+        panel.classList.toggle("hidden", !next);
+        const after = () => { sync(); editor.resizeNodeForContentMinChange?.(); };
+        if (next) refreshDrawerModelSelects(editor).finally(after);
+        else after();
     });
     refreshDrawerModelSelects(editor).finally(sync);
     panel.addEventListener("change", (event) => {
