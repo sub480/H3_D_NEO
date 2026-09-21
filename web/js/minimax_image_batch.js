@@ -1097,6 +1097,13 @@ function clearSegSourceImage(editor, index) {
 
 async function assignSegSourceVideoFromFile(editor, index, file) {
     if (!isBatchVideoFile(file)) return false;
+    // The visible seconds field is the generation-length source of truth.
+    // Persist any in-progress edit before the asynchronous upload can rebuild
+    // the card, and keep targeting the same group if cards are reordered.
+    flushBatchDurationInputs(editor);
+    const targetSeg = editor.timeline.segments?.[index];
+    const targetSegId = targetSeg?.id;
+    if (!targetSeg) return false;
     const key = groupSlotKey(editor, index, "source-video", 0);
     beginSlotLoad(editor, key, t("slot.loading.upload"));
     try {
@@ -1112,7 +1119,9 @@ async function assignSegSourceVideoFromFile(editor, index, file) {
             statusPrefix: t("parse.prefix"),
         });
         const clip = editor._buildClipRecord(prep);
-        const seg = editor.timeline.segments[index];
+        const seg = targetSegId
+            ? editor.timeline.segments?.find((item) => item?.id === targetSegId)
+            : editor.timeline.segments?.[index];
         if (!seg) return false;
         seg.sourceVideo = {
             mediaKind: "video",
@@ -1130,10 +1139,6 @@ async function assignSegSourceVideoFromFile(editor, index, file) {
         }
         seg.sourceVideo.rangeStart = 0;
         seg.sourceVideo.rangeEnd = frameCount;
-        seg.durationSec = preferredDurationSecFromFrames(frameCount, 24);
-        seg.frameCount = frameCount;
-        seg.length = frameCount;
-        seg._videoFrameCount = frameCount;
         endSlotLoad(editor, key);
         editor.renderImageBatchGroups();
         editor.commit(false, { syncTimeline: true });

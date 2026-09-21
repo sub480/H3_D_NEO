@@ -140,7 +140,6 @@ def _gen_segment_ranges(
                     aligned_count,
                     selected_count - aligned_count,
                 )
-            fc = max(fc, aligned_count)
         ranges.append((start, start + fc, raw))
         start += fc
     if not ranges:
