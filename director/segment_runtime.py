@@ -103,7 +103,8 @@ def source_passthrough_chunk(plan: DirectorPlan, seg) -> torch.Tensor:
         clip = raw_clip
     elif plan.output_mode == "fixed":
         clip = fit_frames_to_canvas(
-            raw_clip, plan.width, plan.height, getattr(seg, "video_fit", "contain") or "contain"
+            raw_clip, seg.output_width or plan.width, seg.output_height or plan.height,
+            getattr(seg, "video_fit", "contain") or "contain"
         )
     else:
         clip = fit_video_long_edge(raw_clip, plan.ref_max_size)

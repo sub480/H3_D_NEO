@@ -582,6 +582,8 @@ def execute_director_plan_core(
         )
 
         target_len = max(1, int(seg.frame_count or plan.total_frames or 124))
+        output_width = seg.output_width or plan.width
+        output_height = seg.output_height or plan.height
         if seg.source_clip is not None:
             body_raw = seg.source_clip
             target_len = max(target_len, int(body_raw.shape[0]))
@@ -595,7 +597,7 @@ def execute_director_plan_core(
                 clip_frames = body_raw
             elif plan.output_mode == "fixed":
                 clip_frames = fit_frames_to_canvas(
-                    body_raw, plan.width, plan.height, video_fit
+                    body_raw, output_width, output_height, video_fit
                 )
             else:
                 # long_edge may leave storage-sized frames (e.g. 496) that are not
@@ -716,8 +718,8 @@ def execute_director_plan_core(
                 # Pixel fallback: decoded export has no overshoot beyond the file.
                 prev_end_frame = None
 
-        ctx_w = int(plan.width)
-        ctx_h = int(plan.height)
+        ctx_w = int(output_width)
+        ctx_h = int(output_height)
         if clip_frames is not None and clip_frames.shape[0] > 0:
             ctx_h, ctx_w = int(clip_frames.shape[1]), int(clip_frames.shape[2])
         # H3 patchify requires W/H multiples of 32 (VAE÷16 then 2×2).

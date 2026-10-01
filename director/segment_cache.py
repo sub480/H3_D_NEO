@@ -232,6 +232,9 @@ def _segment_identity_fingerprint(seg: SegmentPlan, plan: DirectorPlan) -> dict[
     if bool(getattr(seg, "use_source_resolution", False)):
         payload["use_source_resolution"] = True
         payload["source_canvas"] = source_canvas
+    elif getattr(seg, "output_width", 0) and getattr(seg, "output_height", 0):
+        payload["source_aspect_canvas"] = [seg.output_width, seg.output_height]
+        payload["video_fit"] = str(getattr(seg, "video_fit", "contain") or "contain")
     elif str(getattr(seg, "video_fit", "contain") or "contain") == "crop":
         payload["video_fit"] = "crop"
     source_frame_count = int(getattr(seg, "source_frame_count", 0) or 0)

@@ -20,6 +20,8 @@ export const RESOLUTION_ASPECTS = [
 export const DEFAULT_ASPECT_RATIO = "16:9 (宽屏)";
 /** Manual width × height (not in official ResolutionSelector). */
 export const CUSTOM_ASPECT_RATIO = "自定义";
+/** Director-only source aspect; not a preset for the separate Refine selector. */
+export const SOURCE_ASPECT_RATIO = "与原视频一致";
 /** Official MiniMax template default: 0.4 MP → 864×480 at 16:9 (multiple=32) */
 export const DEFAULT_MEGAPIXELS = 0.4;
 export const MIN_MEGAPIXELS = 0.1;
@@ -55,6 +57,7 @@ export function normalizeAspectRatioLabel(aspectRatio) {
     if (!v) return DEFAULT_ASPECT_RATIO;
     if (RESOLUTION_ASPECTS.some(([label]) => label === v)) return v;
     if (isCustomAspectRatio(v)) return CUSTOM_ASPECT_RATIO;
+    if (v === SOURCE_ASPECT_RATIO) return SOURCE_ASPECT_RATIO;
     // Fallback: match by ratio prefix e.g. "16:9"
     const prefix = v.split(" ")[0];
     const byPrefix = RESOLUTION_ASPECTS.find(([label]) => label.startsWith(`${prefix} `) || label === prefix);
@@ -138,20 +141,51 @@ export function snapResolutionDim(v, multiple = MINIMAX_CANVAS_MULTIPLE) {
 }
 
 /** ResolutionSelector math: aspect_ratio + megapixels + multiple → width/height. */
-export function resolutionFromSelector(aspectRatio, megapixels, multiple = MINIMAX_CANVAS_MULTIPLE) {
+export function resolutionFromSelector(aspectRatio, megapixels, multiple = MINIMAX_CANVAS_MULTIPLE, sourceDimensions = null) {
     if (isCustomAspectRatio(aspectRatio)) {
         return null;
     }
     const label = normalizeAspectRatioLabel(aspectRatio);
-    const row = RESOLUTION_ASPECTS.find(([l]) => l === label) || RESOLUTION_ASPECTS.find(([l]) => l === DEFAULT_ASPECT_RATIO);
+    const source = label === SOURCE_ASPECT_RATIO;
+    if (source && !(sourceDimensions?.width > 0 && sourceDimensions?.height > 0)) return null;
+    const row = source
+        ? [SOURCE_ASPECT_RATIO, sourceDimensions.width, sourceDimensions.height]
+        : RESOLUTION_ASPECTS.find(([l]) => l === label) || RESOLUTION_ASPECTS.find(([l]) => l === DEFAULT_ASPECT_RATIO);
     const [, wRatio, hRatio] = row;
     const mp = clampMegapixels(megapixels);
-    const mult = Math.max(8, parseInt(multiple, 10) || MINIMAX_CANVAS_MULTIPLE);
+    const mult = source ? MINIMAX_CANVAS_MULTIPLE : Math.max(8, parseInt(multiple, 10) || MINIMAX_CANVAS_MULTIPLE);
     const totalPixels = mp * 1024 * 1024;
     const scale = Math.sqrt(totalPixels / (wRatio * hRatio));
-    const width = Math.round((wRatio * scale) / mult) * mult;
-    const height = Math.round((hRatio * scale) / mult) * mult;
+    const width = Math.max(mult, Math.round((wRatio * scale) / mult) * mult);
+    const height = Math.max(mult, Math.round((hRatio * scale) / mult) * mult);
     return { width, height, megapixels: mp, aspectRatio: row[0], multiple: mult };
+}
+
+/** Native dimensions of the selected range's first clip in this group only. */
+export function groupSourceVideoDimensions(segment) {
+    if (!["v2v", "rv2v"].includes(resolveMixedGroupKey(segment))) return null;
+    const source = segment?.sourceVideo || {};
+    if (source.mediaKind === "image") return null;
+    const video = source.video || source;
+    const clips = source.videoClips?.length ? source.videoClips : [video];
+    const start = Math.max(0, Number(source.rangeStart) || 0);
+    let index = 0;
+    if (video.frameMap?.length && start < video.frameMap.length) {
+        const entry = video.frameMap[start];
+        index = Number(entry?.clip ?? entry?.videoClip) || 0;
+    } else {
+        let remaining = start;
+        for (let i = 0; i < clips.length; i++) {
+            index = i;
+            const count = Number(clips[i]?.sourceFrameCount) || 0;
+            if (remaining < count || count <= 0) break;
+            remaining -= count;
+        }
+    }
+    const clip = clips[Math.max(0, Math.min(clips.length - 1, index))];
+    const width = Number(clip?.width) || 0;
+    const height = Number(clip?.height) || 0;
+    return width > 0 && height > 0 ? { width, height } : null;
 }
 
 export const IMAGE_BATCH_TASKS = new Set();

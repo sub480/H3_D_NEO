@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import math
 
 import torch
 
@@ -228,6 +229,50 @@ def _v2v_video_fit(seg_data: dict | None) -> str:
 
 def _fit_v2v_target_canvas(frames, width: int, height: int, seg_data: dict | None):
     return fit_frames_to_canvas(frames, width, height, _v2v_video_fit(seg_data))
+
+
+def _source_aspect_canvas(seg_data: dict, output: dict, *, load_media: bool) -> tuple[int, int] | None:
+    """Use this group's selected source clip, never the top-level timeline video."""
+    if output.get("aspectRatio") != "与原视频一致" or seg_data.get("videoResolution") == "source":
+        return None
+    source = seg_data.get("sourceVideo") or {}
+    if str(source.get("mediaKind") or "").lower() == "image":
+        return None
+    video = source.get("video") or source
+    clips = source.get("videoClips") or [video]
+    start = max(0, int(source.get("rangeStart") or 0))
+    frame_map = video.get("frameMap") or []
+    if frame_map and start < len(frame_map):
+        entry = frame_map[start]
+        clip_index = int(entry.get("clip", entry.get("videoClip", 0))) if isinstance(entry, dict) else 0
+    else:
+        clip_index = 0
+        remaining = start
+        for index, clip in enumerate(clips):
+            clip_index = index
+            count = int(clip.get("sourceFrameCount") or 0)
+            if remaining < count or count <= 0:
+                break
+            remaining -= count
+    clip = clips[min(max(0, clip_index), len(clips) - 1)]
+    width, height = int(clip.get("width") or 0), int(clip.get("height") or 0)
+    if (width <= 0 or height <= 0) and load_media and (clip.get("videoFile") or clip.get("fileName")):
+        from ..lib.video_io import probe_video_clip
+
+        info = probe_video_clip(clip)
+        width, height = int(info["width"]), int(info["height"])
+    if width <= 0 or height <= 0:
+        return None
+    try:
+        mp = float(output.get("megapixels") or 0.4)
+    except (TypeError, ValueError):
+        mp = 0.4
+    if not math.isfinite(mp) or mp <= 0:
+        mp = 0.4
+    mp = min(16.0, max(0.1, mp))
+    scale = math.sqrt(mp * 1024 * 1024 / (width * height))
+    # Match the JS selector's positive half-up rounding, always on H3's 32 grid.
+    return tuple(max(32, int(math.floor(dim * scale / 32 + 0.5)) * 32) for dim in (width, height))
 
 
 def _mixed_source_video_timeline(
@@ -622,6 +667,12 @@ def build_gen_director_plan(
         mixed_i2v_source = None
         mixed_video_source = None
         source_audio_timeline = None
+        source_canvas = (
+            _source_aspect_canvas(seg_data, output_block, load_media=load_media and is_selected)
+            if task_key == MIXED_KEY and seg_task_key in {"v2v", "rv2v"}
+            else None
+        )
+        seg_out_w, seg_out_h = source_canvas or (out_w, out_h)
         if load_media and is_selected and task_key == MIXED_KEY and seg_task_key == "fl2v":
             from .fl2v_timeline import load_fl2v_segment_media
 
@@ -678,8 +729,8 @@ def build_gen_director_plan(
                 source_timeline = _mixed_source_video_timeline(
                     seg_data,
                     timeline,
-                    target_width=out_w,
-                    target_height=out_h,
+                    target_width=seg_out_w,
+                    target_height=seg_out_h,
                 )
                 if source_timeline is None:
                     raise ValueError(
@@ -696,7 +747,7 @@ def build_gen_director_plan(
                 )
                 if str(seg_data.get("videoResolution") or "target") != "source":
                     mixed_video_source = _fit_v2v_target_canvas(
-                        mixed_video_source, out_w, out_h, seg_data
+                        mixed_video_source, seg_out_w, seg_out_h, seg_data
                     )
         if seg_task_key == "i2v" and seg_refs:
             log.info(
@@ -777,6 +828,8 @@ def build_gen_director_plan(
                 source_clip=seg_source,
                 source_frame_count=source_range[2] if source_range is not None else 0,
                 use_source_resolution=use_source_resolution,
+                output_width=source_canvas[0] if source_canvas else 0,
+                output_height=source_canvas[1] if source_canvas else 0,
                 video_fit=_v2v_video_fit(seg_data if isinstance(seg_data, dict) else {}),
                 source_audio_timeline=source_audio_timeline,
                 source_media_identity=source_media_identity,

@@ -33,6 +33,8 @@ import {
     refAudioLabel,
     refImageLabel,
     RESOLUTION_ASPECTS,
+    SOURCE_ASPECT_RATIO,
+    groupSourceVideoDimensions,
     resolutionFromSelector,
     resolveMixedGroupKey,
     resolveTaskKey,
@@ -3008,6 +3010,7 @@ class H3_D_NEOEditor {
             <select class="bd-select" data-r="out-aspect" data-i18n-title="tooltip.aspectRatio" style="max-width:200px">
                 ${RESOLUTION_ASPECTS.map(([label]) => `<option value="${label}"${label === DEFAULT_ASPECT_RATIO ? " selected" : ""}>${aspectDisplayLabel(label)}</option>`).join("")}
                 <option value="${CUSTOM_ASPECT_RATIO}">${aspectDisplayLabel(CUSTOM_ASPECT_RATIO)}</option>
+                <option value="${SOURCE_ASPECT_RATIO}" data-i18n-title="aspect.sourceHint">${aspectDisplayLabel(SOURCE_ASPECT_RATIO)}</option>
             </select>
             <span class="bd-out-mp-wrap" data-r="out-mp-wrap" data-i18n-title="tooltip.megapixels">
                 <label data-i18n="output.megapixels">百万像素</label>
@@ -3447,6 +3450,7 @@ class H3_D_NEOEditor {
 
     renderImageBatchGroups() {
         renderImageBatchGroups(this);
+        this.updateOutputPreview();
     }
 
     normalizeImageBatchSegments() {
@@ -6217,6 +6221,15 @@ class H3_D_NEOEditor {
     applyResolutionSelector(aspectRatio = null, megapixels = null) {
         const out = this.timeline.output || {};
         const ar = aspectRatio ?? out.aspectRatio ?? this.outAspect?.value ?? DEFAULT_ASPECT_RATIO;
+        if (ar === SOURCE_ASPECT_RATIO) {
+            // Keep the previous fixed canvas for non-video groups and source images.
+            const mp = clampMegapixels(megapixels ?? out.megapixels ?? this.outMp?.value);
+            this.timeline.output = { ...out, mode: "fixed", aspectRatio: ar, megapixels: mp };
+            if (this.outAspect) this.outAspect.value = ar;
+            if (this.outMp && document.activeElement !== this.outMp) this.outMp.value = String(mp);
+            return { width: out.width ?? 864, height: out.height ?? 480,
+                megapixels: mp, aspectRatio: ar, multiple: MINIMAX_CANVAS_MULTIPLE };
+        }
         if (isCustomAspectRatio(ar)) {
             return this.applyCustomResolution(out.width, out.height);
         }
@@ -6285,6 +6298,12 @@ class H3_D_NEOEditor {
 
     updateOutputModeUI() {
         const taskKey = this.getTaskKey();
+        const sourceOption = this.outAspect?.querySelector(`option[value="${SOURCE_ASPECT_RATIO}"]`);
+        if (sourceOption) {
+            const available = ["mixed", "v2v", "rv2v"].includes(taskKey);
+            sourceOption.hidden = !available;
+            sourceOption.disabled = !available;
+        }
         const useSelector = this.isImageBatch() || this.isGenMode() || this.isFl2vMode()
             || NO_VIDEO_UPLOAD_TASKS.has(taskKey);
         // Gen / batch / fl2v: aspect + megapixels, or Custom width/height.
@@ -6309,6 +6328,22 @@ class H3_D_NEOEditor {
     }
 
     _firstPassSize() {
+        const output = this.timeline.output || {};
+        if (output.aspectRatio === SOURCE_ASPECT_RATIO) {
+            const segment = this.timeline.segments?.[this.selectedIndex ?? 0];
+            const source = groupSourceVideoDimensions(segment);
+            if (source) {
+                const resolved = segment.videoResolution === "source"
+                    ? resolveOutputDimensions(source.width, source.height, {
+                        mode: "long_edge", longEdge: Math.max(source.width, source.height),
+                    })
+                    : resolutionFromSelector(SOURCE_ASPECT_RATIO, output.megapixels,
+                        MINIMAX_CANVAS_MULTIPLE, source);
+                return { width: resolved.width, height: resolved.height,
+                    label: `${resolved.width}×${resolved.height} · ${aspectDisplayLabel(SOURCE_ASPECT_RATIO)}` };
+            }
+            return { width: output.width, height: output.height, label: `${output.width}×${output.height}` };
+        }
         if (this.isImageBatch() && (this.getTaskKey() === "i2i" || this.getTaskKey() === "i2v")) {
             const out = this.timeline.output || {};
             if ((out.mode || "long_edge") === "long_edge") {
@@ -6438,6 +6473,8 @@ class H3_D_NEOEditor {
             const resolved = resolutionFromSelector(
                 this.timeline.output?.aspectRatio || DEFAULT_ASPECT_RATIO,
                 Number.isFinite(mp) && mp > 0 ? mp : 0.8,
+                MINIMAX_CANVAS_MULTIPLE,
+                { width: baseW, height: baseH },
             );
             if (resolved) return { width: resolved.width, height: resolved.height, mode, method };
             if (baseW > 0 && baseH > 0) {

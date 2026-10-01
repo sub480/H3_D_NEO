@@ -395,7 +395,14 @@ def _source_canvas(plan, first_pass_images: torch.Tensor | None) -> tuple[int, i
     )
 
 
-def _resolve_refine_canvas(plan, pack: dict) -> tuple[int, int]:
+def _resolve_refine_canvas(plan, pack: dict, seg=None) -> tuple[int, int]:
+    if seg is not None and seg.output_width and seg.output_height:
+        from .refine_pack import canvas_from_director_aspect, is_follow_director_aspect
+
+        if is_follow_director_aspect(pack.get("aspect_ratio")):
+            return canvas_from_director_aspect(
+                seg.output_width, seg.output_height, pack.get("megapixels") or 0.8
+            )
     tw = int(pack.get("target_width") or 0)
     th = int(pack.get("target_height") or 0)
     if tw > 0 and th > 0:
@@ -722,7 +729,7 @@ def apply_segment_refine(
     last_ok = samples
     try:
         if refine_needs_canvas(pack):
-            tw, th = _resolve_refine_canvas(plan, pack)
+            tw, th = _resolve_refine_canvas(plan, pack, seg)
             if refine_uses_h3_latent(pack):
                 work, refine_positive, extra = _apply_h3_latent_upscale(
                     work,

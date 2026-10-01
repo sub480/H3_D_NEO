@@ -234,11 +234,18 @@ def _attach_refine(plan, refine):
 
 
 def _fit_source_clip_to_plan(plan, raw_clip: torch.Tensor, seg=None) -> torch.Tensor:
+    if seg is not None and seg.use_source_resolution:
+        return raw_clip
     if plan.output_mode == "fixed":
         mode = "contain"
         if seg is not None and not bool(getattr(seg, "use_source_resolution", False)):
             mode = getattr(seg, "video_fit", "contain") or "contain"
-        return fit_frames_to_canvas(raw_clip, plan.width, plan.height, mode)
+        return fit_frames_to_canvas(
+            raw_clip,
+            (seg.output_width if seg is not None else 0) or plan.width,
+            (seg.output_height if seg is not None else 0) or plan.height,
+            mode,
+        )
     return fit_video_long_edge(raw_clip, plan.ref_max_size)
 
 

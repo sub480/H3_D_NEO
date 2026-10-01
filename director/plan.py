@@ -318,6 +318,9 @@ class SegmentPlan:
     source_clip: torch.Tensor | None = None
     source_frame_count: int = 0
     use_source_resolution: bool = False
+    # Source-aspect target canvas, independent of the mixed timeline canvas.
+    output_width: int = 0
+    output_height: int = 0
     # v2v/rv2v target-resolution fit: contain (letterbox) or crop (center-cover).
     video_fit: str = "contain"
     source_audio_timeline: dict | None = None

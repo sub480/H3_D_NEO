@@ -237,7 +237,9 @@ def director_prompt_to_timeline(
     output_height = int(base_output.get("height") or default_height)
     output_megapixels = base_output.get("megapixels", _DEFAULT_MEGAPIXELS)
     output_multiple = base_output.get("multiple", _DEFAULT_CANVAS_MULTIPLE)
-    if settings.get("aspectRatio") is not None:
+    if settings.get("aspectRatio") == "与原视频一致":
+        aspect_ratio = "与原视频一致"
+    elif settings.get("aspectRatio") is not None:
         (
             aspect_ratio,
             output_width,

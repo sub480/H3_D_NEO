@@ -2879,6 +2879,7 @@ export function selectBatchGroup(editor, index) {
     flushBatchPromptInputs(editor);
     flushBatchDurationInputs(editor);
     editor.selectedIndex = next;
+    editor.updateOutputPreview?.();
     if (isBatchDetailSolo(editor)) {
         editor.renderImageBatchGroups?.();
     } else {
