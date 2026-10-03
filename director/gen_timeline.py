@@ -171,6 +171,8 @@ def _resolve_gen_image_ref(
 
 
 def _image_ref_identity(ref: dict | None) -> str:
+    if isinstance(ref, str):
+        return ref.replace("\\", "/").strip()
     if not isinstance(ref, dict):
         return ""
     file_name = str(ref.get("imageFile") or ref.get("fileName") or "").replace("\\", "/").strip()
@@ -194,7 +196,7 @@ def _segment_source_media_identity(
         return (f"first:{identity}",) if identity else ()
     if task_key == "fl2v":
         identities = (
-            f"first:{_image_ref_identity(seg_data.get('startImage') or seg_data.get('genImage'))}",
+            f"first:{_image_ref_identity(seg_data.get('startImage'))}",
             f"last:{_image_ref_identity(seg_data.get('endImage'))}",
         )
         return tuple(identity for identity in identities if not identity.endswith(":"))
@@ -231,10 +233,8 @@ def _fit_v2v_target_canvas(frames, width: int, height: int, seg_data: dict | Non
     return fit_frames_to_canvas(frames, width, height, _v2v_video_fit(seg_data))
 
 
-def _source_aspect_canvas(seg_data: dict, output: dict, *, load_media: bool) -> tuple[int, int] | None:
+def _source_video_dimensions(seg_data: dict, *, load_media: bool) -> tuple[int, int] | None:
     """Use this group's selected source clip, never the top-level timeline video."""
-    if output.get("aspectRatio") != "与原视频一致" or seg_data.get("videoResolution") == "source":
-        return None
     source = seg_data.get("sourceVideo") or {}
     if str(source.get("mediaKind") or "").lower() == "image":
         return None
@@ -263,6 +263,68 @@ def _source_aspect_canvas(seg_data: dict, output: dict, *, load_media: bool) -> 
         width, height = int(info["width"]), int(info["height"])
     if width <= 0 or height <= 0:
         return None
+    return width, height
+
+
+def _source_image_dimensions(ref: dict | None) -> tuple[int, int] | None:
+    """Read image headers when metadata is missing, without decoding pixels."""
+    if not isinstance(ref, dict):
+        return None
+    try:
+        width, height = int(ref.get("width") or 0), int(ref.get("height") or 0)
+    except (TypeError, ValueError, OverflowError):
+        width, height = 0, 0
+    if width > 0 and height > 0:
+        return width, height
+    import base64
+    import io
+    import os
+
+    import folder_paths
+    from PIL import Image
+
+    image_file = str(ref.get("imageFile") or "").replace("\\", "/")
+    if image_file:
+        path = os.path.join(folder_paths.get_input_directory(), image_file.replace("/", os.sep))
+        try:
+            with Image.open(path) as image:
+                return image.size
+        except (OSError, ValueError, TypeError):
+            pass
+    if ref.get("imageB64"):
+        try:
+            payload = str(ref["imageB64"]).split(",", 1)[-1]
+            with Image.open(io.BytesIO(base64.b64decode(payload))) as image:
+                return image.size
+        except (OSError, ValueError, TypeError):
+            pass
+    return None
+
+
+def _source_aspect_canvas(seg_data: dict, output: dict, *, load_media: bool) -> tuple[int, int] | None:
+    """Resolve source aspect per group; a supplied first frame takes priority."""
+    if output.get("aspectRatio") != "与原视频一致":
+        return None
+    task_key = resolve_mixed_segment_task_key(seg_data, MIXED_KEY)
+    if task_key in {"v2v", "rv2v"}:
+        if seg_data.get("videoResolution") == "source":
+            return None
+        dimensions = _source_video_dimensions(seg_data, load_media=load_media)
+    elif task_key == "i2v":
+        dimensions = _source_image_dimensions(
+            _resolve_gen_image_ref(seg_data, edit_mode="segment", global_block={})
+        )
+    elif task_key == "fl2v":
+        from .fl2v_timeline import _image_ref_from_raw
+
+        first = _image_ref_from_raw(seg_data.get("startImage"))
+        last = _image_ref_from_raw(seg_data.get("endImage"))
+        dimensions = _source_image_dimensions(first if first is not None else last)
+    else:
+        return None
+    if dimensions is None:
+        return None
+    width, height = dimensions
     try:
         mp = float(output.get("megapixels") or 0.4)
     except (TypeError, ValueError):
@@ -669,7 +731,7 @@ def build_gen_director_plan(
         source_audio_timeline = None
         source_canvas = (
             _source_aspect_canvas(seg_data, output_block, load_media=load_media and is_selected)
-            if task_key == MIXED_KEY and seg_task_key in {"v2v", "rv2v"}
+            if task_key == MIXED_KEY and seg_task_key in {"i2v", "fl2v", "v2v", "rv2v"}
             else None
         )
         seg_out_w, seg_out_h = source_canvas or (out_w, out_h)
@@ -678,10 +740,10 @@ def build_gen_director_plan(
 
             mixed_fl2v_refs, mixed_fl2v_source = load_fl2v_segment_media(
                 seg_data if isinstance(seg_data, dict) else {},
-                width=out_w,
-                height=out_h,
-                output_mode=out_mode,
-                ref_max_size=ref_max,
+                width=seg_out_w,
+                height=seg_out_h,
+                output_mode="fixed" if source_canvas else out_mode,
+                ref_max_size=max(seg_out_w, seg_out_h) if source_canvas else ref_max,
                 frame_count=max(1, int(end) - int(start)),
             )
         elif load_media and is_selected and task_key == MIXED_KEY and seg_task_key == "i2v":
@@ -698,10 +760,10 @@ def build_gen_director_plan(
             mixed_i2v_source = _build_i2v_source_clip(
                 _load_gen_image_tensor(img_ref),
                 max(1, int(end) - int(start)),
-                width=out_w,
-                height=out_h,
-                output_mode=out_mode,
-                ref_max_size=ref_max,
+                width=seg_out_w,
+                height=seg_out_h,
+                output_mode="fixed" if source_canvas else out_mode,
+                ref_max_size=max(seg_out_w, seg_out_h) if source_canvas else ref_max,
             )
         elif load_media and is_selected and task_key == MIXED_KEY and seg_task_key in {"v2v", "rv2v"}:
             source = seg_data.get("sourceVideo") or {}

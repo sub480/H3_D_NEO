@@ -35,11 +35,15 @@ def _image_ref_from_raw(raw: Any) -> dict[str, Any] | None:
     image_b64 = str(raw.get("imageB64") or "").strip()
     if not image_file and not image_b64:
         return None
+    try:
+        width, height = int(raw.get("width") or 0), int(raw.get("height") or 0)
+    except (TypeError, ValueError, OverflowError):
+        width, height = 0, 0
     return {
         "imageFile": image_file,
         "imageB64": image_b64,
-        "width": int(raw.get("width") or 0),
-        "height": int(raw.get("height") or 0),
+        "width": max(0, width),
+        "height": max(0, height),
     }
 
 

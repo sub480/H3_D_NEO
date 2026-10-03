@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import vm from 'node:vm';
 import {
     SOURCE_ASPECT_RATIO, DEFAULT_ASPECT_RATIO, normalizeAspectRatioLabel,
-    resolutionFromSelector, groupSourceVideoDimensions,
+    resolutionFromSelector, groupSourceVideoDimensions, groupSourceDimensions, groupSourceImageRef,
 } from '../web/js/minimax_gen_timeline.js';
 import { aspectDisplayLabel } from '../web/js/minimax_i18n.js';
 
@@ -34,7 +34,7 @@ function group(width, height, taskType = 'v2v') {
 test('selector preserves canonical source option, MP math and mandatory 32 grid', () => {
     assert.equal(normalizeAspectRatioLabel(SOURCE_ASPECT_RATIO), SOURCE_ASPECT_RATIO);
     assert.equal(normalizeAspectRatioLabel('16:9'), DEFAULT_ASPECT_RATIO);
-    assert.equal(aspectDisplayLabel(SOURCE_ASPECT_RATIO), SOURCE_ASPECT_RATIO);
+    assert.equal(aspectDisplayLabel(SOURCE_ASPECT_RATIO), '与源素材一致');
     assert.equal(resolutionFromSelector(SOURCE_ASPECT_RATIO, 1), null);
     for (const [width, height] of [[1920, 1080], [1080, 1920], [1234, 567], [1, 10000]]) {
         for (const mp of [0.1, 0.4, 1, 16]) {
@@ -107,14 +107,14 @@ test('preview changes on source replacement and group selection, not top-level v
     assert.equal(refreshed, 1);
 });
 
-test('source option is visible only in video-capable modes without changing stored choice', () => {
+test('source option is visible in image-source and video-source modes without changing stored choice', () => {
     const option = {};
     const editor = { timeline: { output: { aspectRatio: SOURCE_ASPECT_RATIO } },
         outAspect: { querySelector: () => option, classList: { toggle() {} } },
         isImageBatch: () => true, isGenMode: () => false, isFl2vMode: () => false,
         applyResolutionSelector() {} };
     const update = method('updateOutputModeUI');
-    for (const key of ['mixed', 'v2v', 'rv2v']) {
+    for (const key of ['mixed', 'i2v', 'fl2v', 'v2v', 'rv2v']) {
         editor.getTaskKey = () => key;
         update.call(editor);
         assert.equal(option.hidden, false);
@@ -134,4 +134,81 @@ test('legacy source resolution preview ignores target MP budget', () => {
     const size = method('_firstPassSize').call(editor);
     assert.equal(size.width, 320);
     assert.equal(size.height, 640);
+});
+
+test('image sources and FL2V first/last priority drive preview', () => {
+    const landscape = { imageFile: 'first.png', width: 160, height: 90 };
+    const portrait = { imageFile: 'last.png', width: 90, height: 160 };
+    const cases = [
+        [{ taskType: 'i2v', genImage: landscape, videoResolution: 'source' }, landscape],
+        [{ taskType: 'i2v', genImage: portrait }, portrait],
+        [{ taskType: 'fl2v', startImage: landscape }, landscape],
+        [{ taskType: 'fl2v', endImage: portrait }, portrait],
+        [{ taskType: 'fl2v', startImage: landscape, endImage: portrait }, landscape],
+    ];
+    const editor = { selectedIndex: 0, timeline: {
+        output: { aspectRatio: SOURCE_ASPECT_RATIO, megapixels: 0.4, width: 1024, height: 768 },
+        segments: cases.map(([seg]) => seg),
+    } };
+    const preview = method('_firstPassSize');
+    for (const [index, [seg, ref]] of cases.entries()) {
+        assert.equal(groupSourceImageRef(seg), ref);
+        assert.deepEqual(groupSourceDimensions(seg), { width: ref.width, height: ref.height });
+        editor.selectedIndex = index;
+        const size = preview.call(editor);
+        assert.equal(size.width, ref.width > ref.height ? 864 : 480);
+        assert.equal(size.height, ref.width > ref.height ? 480 : 864);
+    }
+    editor.selectedIndex = 4;
+    editor.timeline.segments[4].startImage = null;
+    assert.equal(preview.call(editor).width, 480);
+    editor.timeline.segments[4].startImage = { imageFile: 'unknown.png' };
+    assert.equal(preview.call(editor).width, 1024);
+    assert.equal(groupSourceDimensions(editor.timeline.segments[4]), null);
+    assert.equal(SOURCE_ASPECT_RATIO, '与原视频一致');
+});
+
+function topFunction(code, name, extra = {}) {
+    const start = code.indexOf(`function ${name}(`);
+    assert.ok(start >= 0, name);
+    const end = code.indexOf('\n}', start) + 2;
+    return vm.runInNewContext(`${code.slice(start, end)}; ${name}`, { ...helpers, ...extra });
+}
+
+test('payload sanitizer preserves source dimensions and inline tail images', () => {
+    const sanitizeSourceImage = topFunction(timelineCode, 'sanitizeSourceImage');
+    const sanitize = topFunction(timelineCode, 'sanitizeSegmentForPayload', {
+        sanitizeSourceImage, sanitizeRefImage: x => x, sanitizeRefAudio: x => x, sanitizeRefVideo: x => x,
+    });
+    const seg = sanitize({ taskType: 'fl2v',
+        genImage: { imageFile: 'source.png', width: 90, height: 160 },
+        startImage: { imageFile: 'first.png', width: 160, height: 90 },
+        endImage: { imageB64: 'inline', width: 90, height: 160 },
+    });
+    const restored = JSON.parse(JSON.stringify(seg));
+    assert.equal(restored.genImage.width, 90);
+    assert.equal(restored.startImage.width, 160);
+    assert.equal(restored.endImage.imageB64, 'inline');
+    assert.equal(restored.endImage.height, 160);
+});
+
+test('source image metadata refreshes preview and rejects stale callbacks', () => {
+    const sync = topFunction(batchCode, 'syncSegSourceImageDimensions');
+    const seg = { taskType: 'i2v', genImage: { imageFile: 'first.png' } };
+    let previews = 0;
+    let writes = 0;
+    const editor = { timeline: { segments: [seg] },
+        updateOutputPreview() { previews++; }, scheduleTimelineSync() { writes++; } };
+    sync(editor, seg, 'genImage', 'first.png', 90, 160);
+    assert.equal(seg.genImage.width, 90);
+    assert.equal(previews, 1);
+    assert.equal(writes, 1);
+    sync(editor, seg, 'genImage', 'first.png', 90, 160);
+    assert.equal(previews, 1);
+    seg.genImage = { imageFile: 'replacement.png' };
+    sync(editor, seg, 'genImage', 'first.png', 160, 90);
+    assert.equal(seg.genImage.width, undefined);
+    editor.timeline.segments = [];
+    sync(editor, seg, 'genImage', 'replacement.png', 160, 90);
+    assert.equal(seg.genImage.width, undefined);
 });

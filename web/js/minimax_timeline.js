@@ -34,7 +34,7 @@ import {
     refImageLabel,
     RESOLUTION_ASPECTS,
     SOURCE_ASPECT_RATIO,
-    groupSourceVideoDimensions,
+    groupSourceDimensions,
     resolutionFromSelector,
     resolveMixedGroupKey,
     resolveTaskKey,
@@ -297,6 +297,18 @@ function sanitizeRefVideo(ref) {
     };
 }
 
+function sanitizeSourceImage(raw) {
+    if (typeof raw === "string") raw = { imageFile: raw.trim() };
+    if (!raw || !(raw.imageFile || raw.imageB64)) return null;
+    return {
+        imageFile: raw.imageFile || "",
+        fileName: raw.fileName || "",
+        ...(raw.imageB64 && !raw.imageFile ? { imageB64: raw.imageB64 } : {}),
+        width: raw.width || 0,
+        height: raw.height || 0,
+    };
+}
+
 function sanitizeSegmentForPayload(seg) {
     if (!seg || typeof seg !== "object") return seg;
     const {
@@ -310,23 +322,9 @@ function sanitizeSegmentForPayload(seg) {
         refs: Array.isArray(rest.refs) ? rest.refs.map(sanitizeRefImage) : [],
         refAudios: Array.isArray(rest.refAudios) ? rest.refAudios.map(sanitizeRefAudio) : [],
         refVideos: Array.isArray(rest.refVideos) ? rest.refVideos.map(sanitizeRefVideo) : [],
-        genImage: rest.genImage
-            ? { imageFile: rest.genImage.imageFile || "", fileName: rest.genImage.fileName || "" }
-            : undefined,
-        startImage: rest.startImage?.imageFile
-            ? {
-                imageFile: rest.startImage.imageFile || "",
-                width: rest.startImage.width || 0,
-                height: rest.startImage.height || 0,
-            }
-            : null,
-        endImage: rest.endImage?.imageFile
-            ? {
-                imageFile: rest.endImage.imageFile || "",
-                width: rest.endImage.width || 0,
-                height: rest.endImage.height || 0,
-            }
-            : null,
+        genImage: sanitizeSourceImage(rest.genImage) || undefined,
+        startImage: sanitizeSourceImage(rest.startImage),
+        endImage: sanitizeSourceImage(rest.endImage),
         referenceVideo: rest.referenceVideo
             ? {
                 videoFile: rest.referenceVideo.videoFile || "",
@@ -6222,7 +6220,7 @@ class H3_D_NEOEditor {
         const out = this.timeline.output || {};
         const ar = aspectRatio ?? out.aspectRatio ?? this.outAspect?.value ?? DEFAULT_ASPECT_RATIO;
         if (ar === SOURCE_ASPECT_RATIO) {
-            // Keep the previous fixed canvas for non-video groups and source images.
+            // Keep the fixed fallback; source-capable groups resolve their own canvas.
             const mp = clampMegapixels(megapixels ?? out.megapixels ?? this.outMp?.value);
             this.timeline.output = { ...out, mode: "fixed", aspectRatio: ar, megapixels: mp };
             if (this.outAspect) this.outAspect.value = ar;
@@ -6300,7 +6298,7 @@ class H3_D_NEOEditor {
         const taskKey = this.getTaskKey();
         const sourceOption = this.outAspect?.querySelector(`option[value="${SOURCE_ASPECT_RATIO}"]`);
         if (sourceOption) {
-            const available = ["mixed", "v2v", "rv2v"].includes(taskKey);
+            const available = ["mixed", "i2v", "fl2v", "v2v", "rv2v"].includes(taskKey);
             sourceOption.hidden = !available;
             sourceOption.disabled = !available;
         }
@@ -6331,9 +6329,10 @@ class H3_D_NEOEditor {
         const output = this.timeline.output || {};
         if (output.aspectRatio === SOURCE_ASPECT_RATIO) {
             const segment = this.timeline.segments?.[this.selectedIndex ?? 0];
-            const source = groupSourceVideoDimensions(segment);
+            const source = groupSourceDimensions(segment);
             if (source) {
-                const resolved = segment.videoResolution === "source"
+                const resolved = ["v2v", "rv2v"].includes(resolveMixedGroupKey(segment))
+                    && segment.videoResolution === "source"
                     ? resolveOutputDimensions(source.width, source.height, {
                         mode: "long_edge", longEdge: Math.max(source.width, source.height),
                     })

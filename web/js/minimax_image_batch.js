@@ -1432,21 +1432,22 @@ function applySegFl2vImage(editor, index, kind, imageFile, width = 0, height = 0
 }
 
 async function assignSegFl2vFromFile(editor, index, kind, file) {
+    const seg = editor.timeline.segments[index];
+    if (!seg) return;
     try {
         if (!isBatchImageFile(file)) throw new Error("Not an image file");
         const uploaded = await uploadImage(file);
         const imageFile = relPath(uploaded);
         if (!imageFile) throw new Error("Upload returned empty filename");
-        applySegFl2vImage(editor, index, kind, imageFile, 0, 0);
+        const liveIndex = editor.timeline.segments.indexOf(seg);
+        if (liveIndex < 0) return;
+        applySegFl2vImage(editor, liveIndex, kind, imageFile, 0, 0);
         try {
             const dims = await readImageDimensions(file);
-            const live = editor.timeline.segments[index];
-            const slot = kind === "end" ? live?.endImage : live?.startImage;
-            if (slot?.imageFile === imageFile) {
-                slot.width = dims.width;
-                slot.height = dims.height;
-                editor.scheduleTimelineSync?.();
-            }
+            syncSegSourceImageDimensions(
+                editor, seg, kind === "end" ? "endImage" : "startImage",
+                imageFile, dims.width, dims.height,
+            );
         } catch (dimErr) {
             console.warn("[MiniMax H3Director] mixed fl2v dims skipped:", dimErr);
         }
@@ -1529,7 +1530,9 @@ function appendMixedFl2vSlots(card, editor, seg, index) {
         src.className = "bd-batch-src";
         const file = kind === "end" ? seg.endImage?.imageFile : seg.startImage?.imageFile;
         const label = t(kind === "end" ? "fl2v.tag.end" : "fl2v.tag.start");
-        renderSourceSlot(src, file);
+        renderSourceSlot(src, file, (width, height) => syncSegSourceImageDimensions(
+            editor, seg, kind === "end" ? "endImage" : "startImage", file, width, height,
+        ));
         if (!file) {
             src.innerHTML = `<span class="ph">${t(kind === "end" ? "panel.fl2v.endOptional" : "panel.fl2v.startRequired")}</span>`;
         } else {
@@ -2364,10 +2367,33 @@ function renderR2vRefSlot(el, ref, slot, index, editor) {
     }
 }
 
-function renderSourceSlot(el, imageFile) {
+function syncSegSourceImageDimensions(editor, seg, key, imageFile, width, height) {
+    if (!editor.timeline.segments.includes(seg)) return;
+    const raw = seg[key];
+    const ref = raw && typeof raw === "object" ? raw : {};
+    const currentFile = typeof raw === "string" ? raw : ref.imageFile
+        || (key === "genImage" ? seg.imageFile : "");
+    if (currentFile !== imageFile || !(width > 0 && height > 0)) return;
+    if (Number(ref.width) === width && Number(ref.height) === height) return;
+    seg[key] = { ...ref, imageFile, width, height };
+    editor.updateOutputPreview?.();
+    editor.scheduleTimelineSync?.();
+}
+
+function renderSourceSlot(el, imageFile, onDimensions = null) {
     el.classList.toggle("has-img", !!imageFile);
     if (imageFile) {
         el.innerHTML = `<img src="${viewUrl(imageFile)}" alt="">`;
+        if (onDimensions) {
+            const image = el.querySelector("img");
+            const sync = () => {
+                if (image.naturalWidth > 0 && image.naturalHeight > 0) {
+                    onDimensions(image.naturalWidth, image.naturalHeight);
+                }
+            };
+            image.onload = sync;
+            if (image.complete) sync();
+        }
     } else {
         el.textContent = t("batch.uploadSource");
     }
@@ -3931,9 +3957,11 @@ function appendBatchCard(list, editor, seg, index, ctx) {
             media.className = "bd-batch-media";
             const src = document.createElement("div");
             src.className = "bd-batch-src";
-            const file = seg.genImage?.imageFile || "";
+            const file = seg.genImage?.imageFile || seg.imageFile || "";
             const label = t("panel.uploadSourceImage");
-            renderSourceSlot(src, file);
+            renderSourceSlot(src, file, (width, height) => syncSegSourceImageDimensions(
+                editor, seg, "genImage", file, width, height,
+            ));
             src.title = file
                 ? t("source.imageTitleFilled", { label, file })
                 : t("tooltip.uploadSourceImage");

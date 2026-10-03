@@ -161,6 +161,29 @@ export function resolutionFromSelector(aspectRatio, megapixels, multiple = MINIM
     return { width, height, megapixels: mp, aspectRatio: row[0], multiple: mult };
 }
 
+/** Source image used by i2v/fl2v; a supplied first frame takes priority. */
+export function groupSourceImageRef(segment) {
+    const imageRef = (raw) => {
+        if (typeof raw === "string") return raw.trim() ? { imageFile: raw.trim() } : null;
+        return raw && (raw.imageFile || raw.imageB64) ? raw : null;
+    };
+    const task = resolveMixedGroupKey(segment);
+    if (task === "i2v") return imageRef(segment?.genImage) || imageRef(segment?.imageFile);
+    if (task === "fl2v") return imageRef(segment?.startImage) || imageRef(segment?.endImage);
+    return null;
+}
+
+/** Native dimensions of this group's source image or video. */
+export function groupSourceDimensions(segment) {
+    const task = resolveMixedGroupKey(segment);
+    if (!["i2v", "fl2v"].includes(task)) return groupSourceVideoDimensions(segment);
+    const image = groupSourceImageRef(segment);
+    const width = Number(image?.width);
+    const height = Number(image?.height);
+    return Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0
+        ? { width, height } : null;
+}
+
 /** Native dimensions of the selected range's first clip in this group only. */
 export function groupSourceVideoDimensions(segment) {
     if (!["v2v", "rv2v"].includes(resolveMixedGroupKey(segment))) return null;

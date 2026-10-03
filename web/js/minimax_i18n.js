@@ -476,8 +476,8 @@ const ZH = {
     "aspect.16_9": "16:9 (宽屏)",
     "aspect.21_9": "21:9 (超宽)",
     "aspect.custom": "自定义",
-    "aspect.source": "与原视频一致",
-    "aspect.sourceHint": "V2V/RV2V 目标分辨率按每组源视频比例和 MP 计算，尺寸对齐 32；原视频分辨率优先，非视频组保留原画幅。",
+    "aspect.source": "与源素材一致",
+    "aspect.sourceHint": "按每组源素材比例和 MP 计算，尺寸对齐 32；I2V 按源图片，FL2V 优先首图、仅尾图时按尾图；V2V/RV2V 原视频分辨率优先，无可用源比例时保留原画幅。",
 
     "slot.picture": "图片{n}",
     "slot.audio": "音频{n}",
@@ -1083,8 +1083,8 @@ const EN = {
     "aspect.16_9": "16:9 (Widescreen)",
     "aspect.21_9": "21:9 (Ultrawide)",
     "aspect.custom": "Custom",
-    "aspect.source": "Match source video",
-    "aspect.sourceHint": "V2V/RV2V target resolution uses each group's source aspect and MP, aligned to 32. Source resolution takes priority; non-video groups keep their canvas.",
+    "aspect.source": "Match source media",
+    "aspect.sourceHint": "Use each group's source aspect and MP, aligned to 32. I2V uses its source image; FL2V prefers the first image, or the last when no first image is supplied. V2V/RV2V source resolution takes priority. Keep the existing canvas when the source aspect is unavailable.",
 
     "slot.picture": "Picture {n}",
     "slot.audio": "Audio {n}",

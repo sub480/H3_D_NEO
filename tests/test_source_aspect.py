@@ -6,12 +6,14 @@ import importlib
 import json
 from pathlib import Path
 import sys
+import tempfile
 import textwrap
 import types
 import unittest
 from unittest.mock import patch
 
 import torch
+from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = '_source_aspect_tests'
@@ -69,6 +71,56 @@ def fake_decode(data, start, end):
 
 
 class SourceAspectTests(unittest.TestCase):
+    def test_image_modes_and_fl2v_priority(self):
+        first = dict(imageFile='first.png', width=160, height=90)
+        last = dict(imageFile='last.png', width=90, height=160)
+        cases = [
+            (dict(taskType='i2v', genImage=first, videoResolution='source'), (864, 480)),
+            (dict(taskType='i2v', genImage=last), (480, 864)),
+            (dict(taskType='fl2v', startImage=first), (864, 480)),
+            (dict(taskType='fl2v', endImage=last), (480, 864)),
+            (dict(taskType='fl2v', startImage=first, endImage=last), (864, 480)),
+        ]
+        for raw, expected in cases:
+            with self.subTest(raw=raw):
+                raw.update(frameCount=5, prompt='test')
+                data = timeline([raw])
+                def decode(ref):
+                    return torch.zeros((1, ref['height'], ref['width'], 3))
+                with patch.object(gen, '_load_gen_image_tensor', side_effect=decode):
+                    plan = build(data)
+                seg = plan.segments[0]
+                self.assertEqual((seg.output_width, seg.output_height), expected)
+                if seg.source_clip is not None:
+                    self.assertEqual(tuple(seg.source_clip.shape[1:3]), expected[::-1])
+                for ref in seg.refs:
+                    self.assertEqual(tuple(ref.tensor.shape[1:3]), expected[::-1])
+                lazy = build(data, False)
+                self.assertEqual(cache._segment_identity_fingerprint(seg, plan),
+                                 cache._segment_identity_fingerprint(lazy.segments[0], lazy))
+                follow = dict(aspect_ratio='跟随导演台', megapixels=0.8)
+                w, h = refine._resolve_refine_canvas(plan, follow, seg)
+                self.assertEqual(w < h, expected[0] < expected[1])
+                normal = copy.deepcopy(data)
+                normal['output']['aspectRatio'] = '16:9 (宽屏)'
+                self.assertEqual(build(normal, False).segments[0].output_width, 0)
+
+    def test_image_headers_without_pixel_decoding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            Image.new('RGB', (90, 160)).save(Path(directory) / 'portrait.png')
+            cases = [dict(taskType='i2v', imageFile='portrait.png'),
+                     dict(taskType='fl2v', startImage='portrait.png'),
+                     dict(taskType='fl2v', endImage=dict(imageFile='portrait.png'))]
+            with patch.object(folder_paths, 'get_input_directory', return_value=directory), \
+                    patch.object(Image.Image, 'load', side_effect=AssertionError('pixel decode')):
+                for raw in cases:
+                    raw.update(frameCount=5, prompt='test')
+                    seg = build(timeline([raw]), False).segments[0]
+                    self.assertEqual((seg.output_width, seg.output_height), (480, 864))
+                raw = dict(taskType='fl2v', startImage=dict(imageFile='missing.png'),
+                           endImage=dict(imageFile='portrait.png', width=90, height=160))
+                self.assertIsNone(gen._source_aspect_canvas(raw, timeline([])['output'], load_media=False))
+
     def test_mp_grid_and_nonpreset_ratio(self):
         for width, height in [(1920, 1080), (1080, 1920), (1234, 567), (1, 10000)]:
             for mp in [0.1, 0.4, 1, 16]:
