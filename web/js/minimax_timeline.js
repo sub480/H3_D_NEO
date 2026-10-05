@@ -3450,6 +3450,7 @@ class H3_D_NEOEditor {
     renderImageBatchGroups() {
         renderImageBatchGroups(this);
         this.updateOutputPreview();
+        this.syncExportSourceImagesUI?.();
     }
 
     normalizeImageBatchSegments() {
@@ -4481,6 +4482,11 @@ class H3_D_NEOEditor {
     showsOutputAudioMode() {
         if (taskShowsOutputAudioMode(this.getTaskKey())) return true;
         return this.isMixedMode() && (this.hasMixedR2vGroup() || this.hasMixedVideoEditGroup());
+    }
+
+    showsOutputSourceImages() {
+        if (isVideoEditTaskKey(this.getTaskKey())) return true;
+        return this.isMixedMode() && this.hasMixedVideoEditGroup();
     }
 
     syncOutputAudioModeUI() {
@@ -6101,16 +6107,16 @@ class H3_D_NEOEditor {
     }
 
     syncExportSourceImagesUI() {
-        const show = isVideoEditTaskKey(this.getTaskKey());
+        const show = this.showsOutputSourceImages();
         this.exportSourceImagesWrap?.classList.toggle("hidden", !show);
         this.timeline.output = this.timeline.output || {};
         const w = this.widget("export_source_images");
         if (this.timeline.output.exportSourceImages == null && w?.value) {
             this.timeline.output.exportSourceImages = true;
         }
-        const on = show && !!this.timeline.output.exportSourceImages;
-        if (this.exportSourceImagesCb) this.exportSourceImagesCb.checked = on;
-        if (w) w.value = on;
+        const enabled = !!this.timeline.output.exportSourceImages;
+        if (this.exportSourceImagesCb) this.exportSourceImagesCb.checked = enabled;
+        if (w) w.value = show && enabled;
     }
 
     updateSegmentContinuityUI() {
@@ -6743,12 +6749,11 @@ class H3_D_NEOEditor {
         if (this.timeline.output.audioMode == null) {
             this.timeline.output.audioMode = "generate";
         }
-        if (isVideoEditTaskKey(this.getTaskKey()) && this.exportSourceImagesCb) {
-            this.timeline.output.exportSourceImages = !!this.exportSourceImagesCb.checked;
-        }
+        // The checkbox change handler owns this preference. A not-yet-synced DOM
+        // checkbox must not erase a restored preference or a hidden group's value.
         const exportSrcW = this.widget("export_source_images");
         if (exportSrcW) {
-            exportSrcW.value = isVideoEditTaskKey(this.getTaskKey())
+            exportSrcW.value = this.showsOutputSourceImages()
                 && !!this.timeline.output.exportSourceImages;
         }
         // Sync from DOM when task+segments are eligible — do not rely on CSS

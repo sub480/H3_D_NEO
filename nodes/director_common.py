@@ -319,7 +319,8 @@ def build_source_images_output(
                 if segment_frame_counts is not None and pos < len(segment_frame_counts)
                 else int(seg.frame_count)
             )
-            chunks.append(_pad_source_last_frame(fitted, chunk_len).cpu().float())
+            fitted = _pad_source_last_frame(fitted, chunk_len)
+            chunks.append(pad_or_trim_frames(fitted, chunk_len).cpu().float())
         return [pad_or_trim_frames(cat_frames_variable_size(chunks), target_len)]
     raw = load_timeline_segment(plan.raw, 0, target_len)
     fitted = _fit_source_clip_to_plan(plan, raw)
