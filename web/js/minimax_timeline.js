@@ -57,6 +57,7 @@ import {
     bindImageBatchEvents,
     bindR2vMediaPlayback,
     deleteImageBatchGroup,
+    remapRunSelectionAfterDelete,
     ensureImageBatchTimeline,
     formatMediaDuration,
     getImageBatchUiHeight,
@@ -5291,7 +5292,9 @@ class H3_D_NEOEditor {
 
     genDeleteSelectedSegment() {
         if (this.timeline.segments.length <= 1) return;
+        if (!this.timeline.segments[this.selectedIndex]) return;
         this.timeline.segments.splice(this.selectedIndex, 1);
+        remapRunSelectionAfterDelete(this, this.selectedIndex);
         this.selectedIndex = clamp(this.selectedIndex, 0, this.timeline.segments.length - 1);
         this.commit();
     }
@@ -9504,8 +9507,12 @@ class H3_D_NEOEditor {
         }
         const left = segs[rightIdx - 1];
         const right = segs[rightIdx];
+        const selectedSegments = new Set((this.timeline.runSelection || [])
+            .map((i) => this.timeline.segments[i]));
         left.length = (parseInt(left.length, 10) || 0) + (parseInt(right.length, 10) || 0);
         segs.splice(rightIdx, 1);
+        // This path also sorts groups; index subtraction alone cannot preserve identity.
+        this.timeline.runSelection = segs.flatMap((seg, i) => selectedSegments.has(seg) ? [i] : []);
         this.timeline.segments = segs;
         this.selectedSplitFrame = null;
         this.selectedIndex = Math.max(0, rightIdx - 1);
@@ -9563,6 +9570,7 @@ class H3_D_NEOEditor {
         // Remove segment UI entry first, then cut matching frames from the
         // logical timeline so preview / export no longer include that range.
         this.timeline.segments.splice(idx, 1);
+        remapRunSelectionAfterDelete(this, idx);
 
         let total = this.getTotalFrames();
         let map = [];

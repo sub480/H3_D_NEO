@@ -11,7 +11,9 @@ import json
 import logging
 import os
 import re
+import threading
 import uuid
+import weakref
 from pathlib import Path
 from typing import Any, Callable
 
@@ -35,6 +37,21 @@ from .plan import (
 from .output_layout import SEGMENT_CACHE_DIR_NAME, h3_output_path
 
 log = logging.getLogger("ComfyUI-MiniMaxH3-Director.director.cache")
+
+_FIRST_PASS_LOCKS = weakref.WeakValueDictionary()
+_FIRST_PASS_LOCKS_GUARD = threading.Lock()
+
+
+def _first_pass_write_lock(root: Path, idx: int):
+    """Serialize one cache slot within this process, without lock files."""
+    key = (os.path.normcase(os.path.realpath(root)), int(idx))
+    with _FIRST_PASS_LOCKS_GUARD:
+        lock = _FIRST_PASS_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _FIRST_PASS_LOCKS[key] = lock
+        return lock
+
 
 SOURCE_VIDEO_FP_KEY = "source_video"
 _PROMPT_REF_TAG_RE = {
@@ -535,6 +552,8 @@ def _align_cache_fingerprint(stored: Any, expected: dict[str, Any]) -> tuple[Any
     if not isinstance(stored, dict):
         return stored, expected
     stored_cmp = dict(stored)
+    stored_cmp.pop("_cache_generation", None)
+    stored_cmp.pop("_cache_files", None)
     expected_cmp = dict(expected)
     if "lora_trigger_words" not in stored_cmp:
         from .plan import strip_lora_trigger_prefix
@@ -693,17 +712,19 @@ def load_first_pass_av_latent(
     idx = seg.index
     meta_path = root / f"seg_{idx:04d}.pre.meta.json"
     latent_path = root / f"seg_{idx:04d}.pre.av.pt"
-    if not latent_path.is_file():
-        return None
     try:
         if meta_path.is_file():
             stored = json.loads(meta_path.read_text(encoding="utf-8"))
+            latent_path = _first_pass_paths(root, idx, stored)["latent"]
             expected = first_pass_cache_fingerprint(seg, plan)
             if not _cache_fingerprint_matches(stored, expected):
                 if _reject_source_stale(stored, expected, seg_index=idx, quiet=True):
                     return None
                 if not allow_stale:
                     return None
+        else:
+            # Legacy carry remains readable only outside a generation transaction.
+            latent_path = _first_pass_paths(root, idx, {})["latent"]
         payload = torch.load(latent_path, map_location="cpu", weights_only=False)
         if not isinstance(payload, dict) or "samples" not in payload:
             return None
@@ -871,6 +892,46 @@ def load_segment_audio(
         return None
 
 
+def _publish_first_pass_json(dest: Path, data: dict) -> None:
+    # No unlink fallback or cleanup: failed writes remain inert for user recycling.
+    tmp = dest.with_name(f".{dest.name}.{uuid.uuid4().hex}.tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+    os.replace(tmp, dest)
+
+
+def _first_pass_paths(root: Path, idx: int, stored: dict) -> dict[str, Path]:
+    suffixes = {"latent": "av.pt", "frames": "pt", "handoff": "handoff.json", "low": "low.pt"}
+    marker = root / f"seg_{idx:04d}.pre.pending.json"
+    generation = stored.get("_cache_generation")
+    if marker.is_file():
+        pending = json.loads(marker.read_text(encoding="utf-8"))
+        if generation is None or pending.get("generation") != generation:
+            raise ValueError("uncommitted first-pass cache generation")
+    if generation is None:
+        return {key: root / f"seg_{idx:04d}.pre.{suffix}" for key, suffix in suffixes.items()}
+    if not marker.is_file() or not re.fullmatch(r"[0-9a-f]{32}", str(generation)):
+        raise ValueError("invalid first-pass cache generation witness")
+    manifest = stored.get("_cache_files")
+    if not isinstance(manifest, dict) or "latent" not in manifest:
+        raise ValueError("invalid first-pass cache manifest")
+    paths = {}
+    for key, suffix in suffixes.items():
+        name = f"seg_{idx:04d}.pre.{generation}.{suffix}"
+        path = root / name
+        entry = manifest.get(key)
+        if entry is not None:
+            if not isinstance(entry, dict) or entry.get("name") != name:
+                raise ValueError("invalid first-pass cache artifact")
+            stat = path.stat()
+            if [stat.st_mtime_ns, stat.st_size] != entry.get("stat"):
+                raise ValueError("first-pass cache artifact generation changed")
+        else:
+            # Missing optional artifacts must not expose old legacy payloads.
+            path = root / f"seg_{idx:04d}.pre.{generation}.absent.{suffix}"
+        paths[key] = path
+    return paths
+
+
 def save_first_pass_cache(
     node_id: str | None,
     seg: SegmentPlan,
@@ -881,7 +942,11 @@ def save_first_pass_cache(
     handoff: dict[str, Any] | None = None,
     low_carry: dict | None = None,
 ) -> None:
-    """Persist first-pass AV latent for confirm-then-refine. Never raises."""
+    """Publish a coherent first-pass generation with metadata last. Never raises.
+
+    Old and incomplete generation files are retained for explicit user recycling.
+    The pending witness makes failed transactions miss instead of mixing payloads.
+    """
     if not node_id:
         return
     if av_latent is None or not isinstance(av_latent, dict) or "samples" not in av_latent:
@@ -891,31 +956,43 @@ def save_first_pass_cache(
         return
     fp = first_pass_cache_fingerprint(seg, plan)
     idx = seg.index
+    # Cover pending, every payload, and the final meta commit with the same lock.
+    # Independent processes must not concurrently write this slot.
+    with _first_pass_write_lock(root, idx):
+        _save_first_pass_generation(root, idx, fp, node_id, av_latent, frames, handoff, low_carry)
+
+
+def _save_first_pass_generation(root, idx, fp, node_id, av_latent, frames, handoff, low_carry):
     meta_path = root / f"seg_{idx:04d}.pre.meta.json"
-    latent_path = root / f"seg_{idx:04d}.pre.av.pt"
-    frames_path = root / f"seg_{idx:04d}.pre.pt"
-    handoff_path = root / f"seg_{idx:04d}.pre.handoff.json"
-    low_carry_path = root / f"seg_{idx:04d}.pre.low.pt"
     try:
+        generation = uuid.uuid4().hex
+        _publish_first_pass_json(root / f"seg_{idx:04d}.pre.pending.json", {"generation": generation})
+        manifest = {}
+
+        def write_artifact(key, suffix, write):
+            path = root / f"seg_{idx:04d}.pre.{generation}.{suffix}"
+            write(path)
+            stat = path.stat()
+            manifest[key] = {"name": path.name, "stat": [stat.st_mtime_ns, stat.st_size]}
+
         cpu_latent = _av_latent_to_cpu(av_latent)
-        _write_via_temp(latent_path, lambda p: torch.save(cpu_latent, p))
-        text = json.dumps(fp, ensure_ascii=False, sort_keys=True)
-        _write_via_temp(meta_path, lambda p: p.write_text(text, encoding="utf-8"))
+        write_artifact("latent", "av.pt", lambda p: torch.save(cpu_latent, p))
         if handoff:
-            _write_via_temp(
-                handoff_path,
+            write_artifact(
+                "handoff", "handoff.json",
                 lambda p: p.write_text(
                     json.dumps(handoff, ensure_ascii=False, sort_keys=True),
                     encoding="utf-8",
                 ),
             )
         if isinstance(low_carry, dict) and "samples" in low_carry:
-            _write_via_temp(low_carry_path, lambda p: torch.save(_av_latent_to_cpu(low_carry), p))
-        else:
-            _safe_unlink(low_carry_path)
+            write_artifact("low", "low.pt", lambda p: torch.save(_av_latent_to_cpu(low_carry), p))
         if isinstance(frames, torch.Tensor) and frames.numel() > 0:
             payload = _frames_to_disk(frames)
-            _write_via_temp(frames_path, lambda p: torch.save(payload, p))
+            write_artifact("frames", "pt", lambda p: torch.save(payload, p))
+        fp["_cache_generation"] = generation
+        fp["_cache_files"] = manifest
+        _publish_first_pass_json(meta_path, fp)
         log.debug(
             "Cached first-pass segment %d for node %s (seed=%s)",
             idx + 1,
@@ -928,8 +1005,6 @@ def save_first_pass_cache(
             idx + 1,
             exc,
         )
-        for stray in root.glob(f".seg_{idx:04d}.pre.*"):
-            _safe_unlink(stray)
 
 
 def _trim_stale_first_pass_frames(
@@ -986,14 +1061,17 @@ def load_first_pass_frames_stale(
     frames_path = root / f"seg_{idx:04d}.pre.pt"
     meta_path = root / f"seg_{idx:04d}.pre.meta.json"
     handoff_path = root / f"seg_{idx:04d}.pre.handoff.json"
-    if not frames_path.is_file():
-        return None
     try:
         if meta_path.is_file():
             stored = json.loads(meta_path.read_text(encoding="utf-8"))
+            paths = _first_pass_paths(root, idx, stored)
+            frames_path, handoff_path = paths["frames"], paths["handoff"]
             expected = first_pass_cache_fingerprint(seg, plan)
             if _reject_source_stale(stored, expected, seg_index=idx, quiet=True):
                 return None
+        else:
+            paths = _first_pass_paths(root, idx, {})
+            frames_path, handoff_path = paths["frames"], paths["handoff"]
         loaded = torch.load(frames_path, map_location="cpu", weights_only=True)
         if not isinstance(loaded, torch.Tensor) or loaded.numel() <= 0:
             return None
@@ -1035,10 +1113,13 @@ def load_first_pass_cache(
     frames_path = root / f"seg_{idx:04d}.pre.pt"
     handoff_path = root / f"seg_{idx:04d}.pre.handoff.json"
     low_carry_path = root / f"seg_{idx:04d}.pre.low.pt"
-    if not meta_path.is_file() or not latent_path.is_file():
+    if not meta_path.is_file():
         return None
     try:
         stored = json.loads(meta_path.read_text(encoding="utf-8"))
+        paths = _first_pass_paths(root, idx, stored)
+        latent_path, frames_path = paths["latent"], paths["frames"]
+        handoff_path, low_carry_path = paths["handoff"], paths["low"]
         expected = first_pass_cache_fingerprint(seg, plan)
         stored_cmp, expected_cmp = _align_cache_fingerprint(stored, expected)
         if not isinstance(stored, dict) or stored_cmp != expected_cmp:
@@ -1062,7 +1143,11 @@ def load_first_pass_cache(
                 loaded = torch.load(frames_path, map_location="cpu", weights_only=True)
                 if isinstance(loaded, torch.Tensor) and loaded.numel() > 0:
                     frames = _frames_from_disk(loaded)
+                elif stored.get("_cache_generation"):
+                    raise ValueError("invalid first-pass frames payload")
             except Exception as exc:
+                if stored.get("_cache_generation"):
+                    raise
                 log.debug("Segment %d first-pass frames skipped: %s", idx + 1, exc)
         handoff: dict[str, Any] = {}
         if handoff_path.is_file():
@@ -1070,7 +1155,11 @@ def load_first_pass_cache(
                 data = json.loads(handoff_path.read_text(encoding="utf-8"))
                 if isinstance(data, dict):
                     handoff = data
+                elif stored.get("_cache_generation"):
+                    raise ValueError("invalid first-pass handoff payload")
             except Exception:
+                if stored.get("_cache_generation"):
+                    raise
                 handoff = {}
         low_carry = None
         if low_carry_path.is_file():
@@ -1078,7 +1167,11 @@ def load_first_pass_cache(
                 candidate = torch.load(low_carry_path, map_location="cpu", weights_only=False)
                 if isinstance(candidate, dict) and "samples" in candidate:
                     low_carry = candidate
+                elif stored.get("_cache_generation"):
+                    raise ValueError("invalid first-pass low-carry payload")
             except Exception as exc:
+                if stored.get("_cache_generation"):
+                    raise
                 log.debug("Segment %d low carry skipped: %s", idx + 1, exc)
         return {"av_latent": payload, "frames": frames, "handoff": handoff, "low_carry": low_carry}
     except Exception as exc:
@@ -1218,8 +1311,12 @@ def inspect_first_pass_cache(
         if meta_exists:
             try:
                 stored = json.loads(meta_path.read_text(encoding="utf-8"))
+                latent_path = _first_pass_paths(root, idx, stored)["latent"]
+                latent_exists = latent_path.is_file()
+                cache_exists = meta_exists and latent_exists
             except Exception as exc:
                 read_error = str(exc)
+                cache_exists = False
 
         expected = first_pass_cache_fingerprint(seg, plan)
         stored_cmp, expected_cmp = _align_cache_fingerprint(stored, expected)

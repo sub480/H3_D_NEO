@@ -39,7 +39,18 @@ META_APPLIED_KEY = "mmx_semantic_bridge"
 
 REF2VA_TASKS = frozenset({"r2v", "v2v", "rv2v"})
 
-_MODEL_CACHE: dict[str, nn.Module] = {}
+_MODEL_CACHE: dict[tuple, nn.Module] = {}
+
+
+def weight_file_identity(path: str | None, *, missing_name: str = "") -> dict[str, Any]:
+    """JSON-stable stat identity shared by weight fingerprints and model caches."""
+    actual = os.path.realpath(os.path.abspath(path)) if path else ""
+    try:
+        stat = os.stat(actual)
+        return {"path": actual, "mtime_ns": stat.st_mtime_ns, "size": stat.st_size,
+                "missing": False}
+    except OSError:
+        return {"path": actual, "name": missing_name, "missing": True}
 
 
 class SemanticStudent(nn.Module):
@@ -142,13 +153,17 @@ def _load_state_dict(path: str) -> dict[str, torch.Tensor]:
 
 
 def load_semantic_student(path: str) -> SemanticStudent:
-    cached = _MODEL_CACHE.get(path)
+    identity = weight_file_identity(path)
+    key = tuple(sorted(identity.items()))
+    cached = _MODEL_CACHE.get(key)
     if cached is not None:
         return cached
     student = SemanticStudent()
     student.load_state_dict(_load_state_dict(path), strict=True)
     student.eval()
-    _MODEL_CACHE[path] = student
+    # Retain only the most recently used student, including replacement weights.
+    _MODEL_CACHE.clear()
+    _MODEL_CACHE[key] = student
     return student
 
 
@@ -208,10 +223,21 @@ def semantic_bridge_fingerprint(plan) -> dict[str, Any]:
     if not semantic_bridge_enabled(plan):
         return {}
     pack = plan.semantic_bridge
+    alpha = _clamp_float(pack.get("alpha"), DEFAULT_ALPHA, 0.0, 1.0)
+    if alpha == 0.0:
+        return {}
+    adapter = str(pack.get("adapter") or "")
+    path = resolve_semantic_bridge_path(adapter)
+    if not path and adapter and not adapter.startswith("("):
+        root = ensure_semantic_bridge_folder()
+        path = adapter if os.path.isabs(adapter) or not root else os.path.join(root, adapter)
     return {
         "semantic_bridge": True,
         "sb_adapter": str(pack.get("adapter") or ""),
-        "sb_alpha": round(float(pack.get("alpha") or 0.0), 4),
+        "sb_weights": weight_file_identity(
+            path, missing_name=adapter,
+        ),
+        "sb_alpha": round(alpha, 4),
         "sb_mag": bool(pack.get("magnitude_match", True)),
     }
 
@@ -260,6 +286,9 @@ def apply_semantic_bridge(positive, plan, *, task_key: str = ""):
     if not semantic_bridge_enabled(plan):
         return positive, None
     pack = plan.semantic_bridge
+    alpha = _clamp_float(pack.get("alpha"), DEFAULT_ALPHA, 0.0, 1.0)
+    if alpha == 0.0:
+        return positive, None
     adapter = str(pack.get("adapter") or "").strip()
     path = resolve_semantic_bridge_path(adapter)
     if not path:
@@ -291,7 +320,7 @@ def apply_semantic_bridge(positive, plan, *, task_key: str = ""):
         rewritten = _rewrite_hidden(
             hidden,
             student,
-            float(pack.get("alpha") or DEFAULT_ALPHA),
+            alpha,
             bool(pack.get("magnitude_match", True)),
         )
     except Exception as exc:

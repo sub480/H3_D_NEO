@@ -677,7 +677,7 @@ def refine_model_for(pack: dict[str, Any] | None, fallback, task_key: str | None
 
 def refine_seed_for(pack: dict[str, Any], seed: int, pass_index: int = 0) -> int:
     if pack.get("seed_mode") == "offset":
-        return int(seed) + 1 + int(max(0, pass_index))
+        return (int(seed) + 1 + int(max(0, pass_index))) % (2**64)
     return int(seed)
 
 

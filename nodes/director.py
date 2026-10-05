@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from types import SimpleNamespace
 
 import comfy.samplers
 
@@ -79,14 +80,17 @@ def _director_is_changed_value(value):
     return {"type": f"{type(value).__module__}.{type(value).__qualname__}"}
 
 
-def _director_input_signature(kwargs: dict, pre_cache_signature: str) -> str:
+def _director_input_signature(kwargs: dict, pre_cache_signature: str, semantic_bridge_fp=None) -> str:
     inputs = {
         key: _director_is_changed_value(value)
         for key, value in kwargs.items()
         if key not in _DIRECTOR_LINKED_INPUTS
     }
+    signature_fields = {"inputs": inputs, "pre_cache": pre_cache_signature}
+    if semantic_bridge_fp:
+        signature_fields["semantic_bridge"] = semantic_bridge_fp
     payload = json.dumps(
-        {"inputs": inputs, "pre_cache": pre_cache_signature},
+        signature_fields,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
@@ -308,7 +312,17 @@ class H3_D_NEO:
         from ..director.segment_cache import first_pass_cache_disk_signature
 
         pre_cache_signature = first_pass_cache_disk_signature(unique_id)
-        return _director_input_signature(kwargs, pre_cache_signature)
+        semantic_bridge_fp = None
+        if _widget_bool(kwargs.get("semantic_bridge_enable", False)):
+            from ..director.semantic_bridge import pack_semantic_bridge, semantic_bridge_fingerprint
+
+            pack = pack_semantic_bridge(
+                adapter=kwargs.get("semantic_bridge_adapter", ""),
+                alpha=kwargs.get("semantic_bridge_alpha", 0.15),
+                magnitude_match=_widget_bool(kwargs.get("semantic_bridge_magnitude_match"), True),
+            )
+            semantic_bridge_fp = semantic_bridge_fingerprint(SimpleNamespace(semantic_bridge=pack))
+        return _director_input_signature(kwargs, pre_cache_signature, semantic_bridge_fp)
 
     RETURN_TYPES = ("IMAGE", "AUDIO", "INT", "IMAGE", "IMAGE", "BOOLEAN", "IMAGE")
     RETURN_NAMES = ("images", "audio", "frame_count", "source_images", "images_pre_refine", "refine_enabled", "images_pre_face_refine")

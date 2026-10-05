@@ -958,13 +958,22 @@ export function addImageBatchGroup(editor) {
     editor.resizeNodeForContentMinChange?.();
 }
 
+export function remapRunSelectionAfterDelete(editor, index) {
+    // Selection stores group indices, not IDs; preserve surviving group identity.
+    editor.timeline.runSelection = (editor.timeline.runSelection || [])
+        .filter((i) => i !== index)
+        .map((i) => i > index ? i - 1 : i);
+}
+
 export function deleteImageBatchGroup(editor, index) {
     if (editor.hasExternalI2vGroups?.() || editor.hasExternalR2vGroups?.()) return;
     if (editor.timeline.segments.length <= 1) return;
+    if (!Number.isInteger(index) || index < 0 || index >= editor.timeline.segments.length) return;
     // Persist drafts while DOM still matches the current array, then splice.
     flushBatchPromptInputs(editor);
     flushBatchDurationInputs(editor);
     editor.timeline.segments.splice(index, 1);
+    remapRunSelectionAfterDelete(editor, index);
     normalizeImageBatchSegments(editor);
     editor.selectedIndex = clamp(
         editor.selectedIndex > index ? editor.selectedIndex - 1 : editor.selectedIndex,

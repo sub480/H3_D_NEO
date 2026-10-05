@@ -182,7 +182,7 @@ def _rank_box(box, frame_w: int, frame_h: int, select: str) -> float:
 def track_and_crop(
     images: torch.Tensor,
     pack: dict[str, Any],
-) -> tuple[torch.Tensor, dict[str, Any], str]:
+) -> tuple[torch.Tensor | None, dict[str, Any] | None, str]:
     """Return (crops [K,ch,cw,3], transform, report)."""
     if images.ndim != 4 or images.shape[0] < 1:
         raise ValueError("FaceRefine 需要 IMAGE 视频帧 [N,H,W,C]。")
@@ -204,12 +204,19 @@ def track_and_crop(
 
     lock = None  # (cx, cy, h)
     found = 0
+    detected_frames = 0
+    failed_frames = 0
+    first_error = None
     for i in range(n_frames):
         try:
             res = detector.predict(_to_bgr_u8(frames[i]), conf=conf, verbose=False)[0]
             boxes = res.boxes.xyxy.tolist() if len(res.boxes) else []
+            detected_frames += 1
         except Exception as exc:
             log.debug("Face detect frame %d failed: %s", i, exc)
+            failed_frames += 1
+            if first_error is None:
+                first_error = f"{type(exc).__name__}: {exc}"[:500]
             boxes = []
         if not boxes:
             continue
@@ -236,6 +243,13 @@ def track_and_crop(
         found += 1
 
     if found == 0:
+        if detected_frames == 0 and failed_frames:
+            note = (
+                f"FaceRefine skipped: detector failed on all {n_frames} frames; "
+                f"original frames retained. First error: {first_error}"
+            )
+            log.warning("%s", note)
+            return None, None, note
         raise ValueError(
             "FaceRefine 未检测到人脸。请换检测器、降低 confidence，或确认成片里有可见的脸。"
         )
@@ -301,4 +315,7 @@ def track_and_crop(
         f"FaceRefine track: {found}/{n_frames} faces, select={select}, "
         f"canvas={canvas_w}x{canvas_h} ({canvas_mode}), crop×{crop_factor:g}"
     )
+    if failed_frames:
+        report += f"; detection failed on {failed_frames} frames, first error: {first_error}"
+        log.warning("%s", report)
     return crops, transform, report

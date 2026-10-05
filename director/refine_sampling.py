@@ -151,6 +151,44 @@ def _video_latent_canvas(video_latent) -> tuple[int, int, int, tuple[int, int]]:
     return int(samples.shape[-1]) * 16, int(samples.shape[-2]) * 16, int(samples.shape[2]), latent_hw
 
 
+def _overwrite_endpoint_keyframes(existing, rebuilt):
+    from .h3_context_patches import CTX_FRAME_KEY
+
+    marked_indices = {int(kf[CTX_FRAME_KEY]) for kf in existing if CTX_FRAME_KEY in kf}
+    marked = bool(marked_indices)
+    merged = []
+    used = {0} if 0 in marked_indices else set()
+    for kf in existing:
+        is_context = CTX_FRAME_KEY in kf
+        rfi = int(kf[CTX_FRAME_KEY] if is_context else kf.get("resolved_frame_index", -1))
+        if not is_context and rfi in marked_indices and (rfi == 0 or rfi in rebuilt):
+            continue
+        # The marked head belongs to continuity, not the explicit first image.
+        if is_context and rfi == 0:
+            merged.append(kf)
+            used.add(0)
+            continue
+        if rfi in rebuilt:
+            if rfi in used:
+                continue
+            entry = dict(kf)
+            entry["latent"] = rebuilt[rfi]
+            if marked:
+                entry[CTX_FRAME_KEY] = rfi
+            merged.append(entry)
+            used.add(rfi)
+        else:
+            merged.append(kf)
+    for rfi, latent in rebuilt.items():
+        if rfi in used:
+            continue
+        entry = {"resolved_frame_index": rfi, "latent": latent}
+        if marked:
+            entry[CTX_FRAME_KEY] = rfi
+        merged.append(entry)
+    return merged
+
+
 def _rebuild_second_pass_keyframes(
     positive,
     *,
@@ -162,7 +200,6 @@ def _rebuild_second_pass_keyframes(
     """Re-encode I2V/FL2V keyframes at the upscaled canvas. CLIP tokens stay as first-pass."""
     import node_helpers
 
-    from .h3_context_patches import CTX_FRAME_KEY
     from .h3_motion_context import _existing_keyframes, pixel_frames_for_latent_t
 
     width, height, latent_t, latent_hw = _video_latent_canvas(video_latent)
@@ -182,24 +219,7 @@ def _rebuild_second_pass_keyframes(
     if not rebuilt:
         return positive, False
 
-    merged = []
-    used = set()
-    for kf in existing:
-        if CTX_FRAME_KEY in kf:
-            merged.append(kf)
-            continue
-        rfi = int(kf.get("resolved_frame_index", -1))
-        if rfi in rebuilt:
-            entry = dict(kf)
-            entry["latent"] = rebuilt[rfi]
-            merged.append(entry)
-            used.add(rfi)
-            continue
-        merged.append(kf)
-    for rfi, latent in rebuilt.items():
-        if rfi in used:
-            continue
-        merged.append({"resolved_frame_index": rfi, "latent": latent})
+    merged = _overwrite_endpoint_keyframes(existing, rebuilt)
     if not merged:
         return positive, False
     return node_helpers.conditioning_set_values(positive, {"minimax_keyframes": merged}), True
@@ -465,18 +485,6 @@ def _apply_h3_latent_upscale(
         audio_latent.pop("noise_mask", None)
     work = _join_av(encoded, audio_latent, work)
     notes = [f"{tw}×{th}", "h3_latent"]
-    try:
-        refine_positive, rebuilt = _rebuild_second_pass_keyframes(
-            refine_positive,
-            vae=vae,
-            video_latent=encoded,
-            first_frame=first_frame,
-            last_frame=last_frame,
-        )
-        if rebuilt:
-            notes.append("second-pass keyframes")
-    except Exception as exc:
-        log.warning("H3 latent upscale keyframe rebuild failed (%s); continuing.", exc)
     if pin_frames > 0:
         try:
             prefix = None
@@ -499,6 +507,19 @@ def _apply_h3_latent_upscale(
                 notes.append(f"re-pin {pin_frames}f")
         except Exception as exc:
             log.warning("H3 latent upscale re-pin failed (%s); continuing.", exc)
+    # Re-pin replaces all context markers, so restore endpoints only afterwards.
+    try:
+        refine_positive, rebuilt = _rebuild_second_pass_keyframes(
+            refine_positive,
+            vae=vae,
+            video_latent=encoded,
+            first_frame=first_frame,
+            last_frame=last_frame,
+        )
+        if rebuilt:
+            notes.append("second-pass keyframes")
+    except Exception as exc:
+        log.warning("H3 latent upscale keyframe rebuild failed (%s); continuing.", exc)
     if on_phase:
         on_phase("upscale", 1)
     return work, refine_positive, notes
@@ -784,22 +805,6 @@ def apply_segment_refine(
                 )
                 encoded = _encode_video(vae, frames)
                 work = _join_av(encoded, audio_latent, work)
-                try:
-                    refine_positive, rebuilt = _rebuild_second_pass_keyframes(
-                        refine_positive,
-                        vae=vae,
-                        video_latent=encoded,
-                        first_frame=first_frame,
-                        last_frame=last_frame,
-                    )
-                    if rebuilt:
-                        note_parts.append("second-pass keyframes")
-                except Exception as exc:
-                    log.warning(
-                        "Segment %s refine upscale keyframe rebuild failed (%s); continuing.",
-                        int(getattr(seg, "index", 0)) + 1,
-                        exc,
-                    )
                 if guide_pin > 0:
                     try:
                         refine_positive, pinned, work = _repin_after_upscale(
@@ -821,6 +826,23 @@ def apply_segment_refine(
                             int(getattr(seg, "index", 0)) + 1,
                             exc,
                         )
+                # Match latent upscale: refresh the prefix before restoring endpoints.
+                try:
+                    refine_positive, rebuilt = _rebuild_second_pass_keyframes(
+                        refine_positive,
+                        vae=vae,
+                        video_latent=encoded,
+                        first_frame=first_frame,
+                        last_frame=last_frame,
+                    )
+                    if rebuilt:
+                        note_parts.append("second-pass keyframes")
+                except Exception as exc:
+                    log.warning(
+                        "Segment %s refine upscale keyframe rebuild failed (%s); continuing.",
+                        int(getattr(seg, "index", 0)) + 1,
+                        exc,
+                    )
                 note_parts.append(f"{tw}×{th}")
                 note_parts.append(how)
                 if on_phase:
