@@ -271,6 +271,22 @@ def probe_video_clip(video: dict) -> dict:
     return probe_video_file(resolve_video_path(video))
 
 
+def probe_video_display_size(path: str) -> tuple[int, int]:
+    """Read one frame using the decoder's own OpenCV orientation policy."""
+    cv2 = _require_cv2()
+    cap = cv2.VideoCapture(path)
+    try:
+        if not cap.isOpened():
+            raise ValueError(f"Cannot open video: {path}")
+        ok, frame = cap.read()
+        if not ok or frame is None:
+            raise ValueError(f"Cannot decode display-size frame: {path}")
+        height, width = frame.shape[:2]
+        return int(width), int(height)
+    finally:
+        cap.release()
+
+
 def load_video_resampled(
     path: str,
     frame_rate: float,
@@ -280,6 +296,7 @@ def load_video_resampled(
     storage_height: int | None = None,
     long_edge: int = 848,
     hold_past_eof: bool = True,
+    strict: bool = False,
 ) -> torch.Tensor:
     """Decode selected resampled frame indices from a video file."""
     if not frame_indices:
@@ -313,35 +330,52 @@ def load_video_resampled(
     first_failed_frame = 0
     last_failed_frame = 0
 
-    for src_idx in unique:
-        t_sec = max(0.0, src_idx / float(frame_rate or 24.0))
-        native_frame = int(round(t_sec * native_fps))
-        if native_count > 0 and native_frame >= native_count:
-            if not hold_past_eof:
-                break
-            if fallback is not None:
-                decoded[src_idx] = fallback
-            continue
-        cap.set(cv2.CAP_PROP_POS_FRAMES, native_frame)
-        ok, bgr = cap.read()
-        if not ok or bgr is None:
-            if failed_count == 0:
-                first_failed_frame = native_frame
-            failed_count += 1
-            last_failed_frame = native_frame
-            if fallback is not None:
-                decoded[src_idx] = fallback
-            continue
+    try:
+        for src_idx in unique:
+            if strict and src_idx < 0:
+                raise ValueError(f"Negative source frame: {src_idx}")
+            t_sec = max(0.0, src_idx / float(frame_rate or 24.0))
+            native_frame = int(round(t_sec * native_fps))
+            if native_count > 0 and native_frame >= native_count:
+                if strict:
+                    raise ValueError(f"Source frame {src_idx} exceeds video EOF: {path}")
+                if not hold_past_eof:
+                    break
+                if fallback is not None:
+                    decoded[src_idx] = fallback
+                continue
+            sought = cap.set(cv2.CAP_PROP_POS_FRAMES, native_frame)
+            if strict and not sought:
+                raise ValueError(f"Cannot seek source frame {src_idx}: {path}")
+            ok, bgr = cap.read()
+            if not ok or bgr is None:
+                if strict:
+                    raise ValueError(f"Cannot decode source frame {src_idx}: {path}")
+                if failed_count == 0:
+                    first_failed_frame = native_frame
+                failed_count += 1
+                last_failed_frame = native_frame
+                if fallback is not None:
+                    decoded[src_idx] = fallback
+                continue
 
-        if rotate_90_cw:
-            bgr = cv2.rotate(bgr, cv2.ROTATE_90_CLOCKWISE)
-        if (bgr.shape[1], bgr.shape[0]) != (out_w, out_h):
-            bgr = cv2.resize(bgr, (out_w, out_h), interpolation=cv2.INTER_AREA)
-        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
-        decoded[src_idx] = rgb
-        fallback = rgb
-
-    cap.release()
+            if strict:
+                # Metadata may describe encoded rather than display orientation.
+                out_w, out_h, rotate_90_cw = _resolve_load_dimensions(
+                    bgr.shape[1], bgr.shape[0],
+                    storage_width=storage_width,
+                    storage_height=storage_height,
+                    long_edge=long_edge,
+                )
+            if rotate_90_cw:
+                bgr = cv2.rotate(bgr, cv2.ROTATE_90_CLOCKWISE)
+            if (bgr.shape[1], bgr.shape[0]) != (out_w, out_h):
+                bgr = cv2.resize(bgr, (out_w, out_h), interpolation=cv2.INTER_AREA)
+            rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+            decoded[src_idx] = rgb
+            fallback = rgb
+    finally:
+        cap.release()
 
     if failed_count:
         log.warning(

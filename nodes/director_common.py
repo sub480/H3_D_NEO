@@ -178,6 +178,7 @@ def prepare_director_plan(
     semantic_bridge=None,
     face_refine=None,
     refine=None,
+    sam31=None,
     lora_trigger_words=None,
     lora_trigger_words_r2v=None,
 ):
@@ -215,6 +216,8 @@ def prepare_director_plan(
     plan.semantic_bridge = normalize_semantic_bridge_pack(semantic_bridge)
     from ..director.face_refine.pack import normalize_face_refine_pack
     plan.face_refine = normalize_face_refine_pack(face_refine)
+    from ..director.sam31_config import normalize_config as normalize_sam31_config
+    plan.sam31 = normalize_sam31_config(sam31)
     plan = _attach_refine(plan, refine)
     plan = apply_lora_trigger_words(plan, lora_trigger_words)
     plan = apply_lora_trigger_words_r2v(plan, lora_trigger_words_r2v)

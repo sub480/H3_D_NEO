@@ -5,9 +5,11 @@ Licensed under the Apache License, Version 2.0. See LICENSE.
 """
 
 from .nodes.director import H3_D_NEO
+from .nodes.director_sam31 import DirectorSAM31Job
 
 NODE_CLASS_MAPPINGS = {
     "H3_D_NEO": H3_D_NEO,
+    "DirectorSAM31Job": DirectorSAM31Job,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {

@@ -91,6 +91,7 @@ import {
     wireMediaDuration,
 } from "./minimax_image_batch.js";
 import { closePassPanels, mountDirectorFaceRefinePanel, mountDirectorRefinePanel, mountDirectorSamplePanel, mountDirectorSelfLiftPanel, mountDirectorSemanticBridgePanel } from "./minimax_refine.js";
+import { mountDirectorSam31Panel, normalizeSam31Config, SAM31_WIDGET_NAMES } from "./minimax_sam31.js";
 import {
     extractReferenceAudioFromExistingVideo,
     hasDuplicateReferenceAudio,
@@ -2630,6 +2631,7 @@ class H3_D_NEOEditor {
                     prompt,
                     negativePrompt: matched?.negativePrompt ?? "",
                     externalNodeId: spec.nodeId ?? null,
+                    sam31: matched?.sam31,
                     refs,
                     refAudios,
                     refVideos,
@@ -2842,6 +2844,7 @@ class H3_D_NEOEditor {
                     startImage: clean.startImage || null,
                     endImage: clean.endImage || null,
                     sourceVideo: clean.sourceVideo,
+                    sam31: clean.sam31,
                     videoResolution: clean.videoResolution === "source" ? "source" : "target",
                     videoFit: clean.videoFit === "crop" ? "crop" : "contain",
                     continuityFromPrev: isSegmentContinuityFromPrev(clean, index),
@@ -3067,6 +3070,7 @@ class H3_D_NEOEditor {
         mountDirectorSemanticBridgePanel(this);
         mountDirectorRefinePanel(this);
         mountDirectorFaceRefinePanel(this);
+        mountDirectorSam31Panel(this);
         const continuityPanel = document.createElement("div");
         continuityPanel.className = "bd-refine-panel bd-continuity-panel hidden";
         continuityPanel.setAttribute("data-r", "segment-continuity-panel");
@@ -3966,6 +3970,7 @@ class H3_D_NEOEditor {
     }
 
     destroy() {
+        this.disposeSAM31Panel?.();
         clearTimeout(this._syncTimer);
         clearTimeout(this._settleRenderTimer);
         clearTimeout(this._settleRenderLateTimer);
@@ -4011,6 +4016,7 @@ class H3_D_NEOEditor {
     widget(name) { return this.node.widgets?.find((w) => w.name === name); }
 
     applyImportedTimeline(timeline, widgets = {}) {
+        this.pauseSAM31Panel?.();
         const data = timeline && typeof timeline === "object" ? timeline : {};
         // Replace, do not merge: drop in-memory drafts from the previous task so
         // later t2v/r2v/v2v switches restore pack batchWorkspaces, not stale slots.
@@ -4027,7 +4033,11 @@ class H3_D_NEOEditor {
         if (this.taskTypeWidget && taskType) this.taskTypeWidget.value = taskType;
         if (this._snapshotSelector) this._snapshotSelector.render();
         else if (this.globalTask && taskType) this.globalTask.value = taskType;
-        for (const name of ["steps", "sampler", "scheduler", "cfg", "shift_video", "shift_audio", "seed"]) {
+        const sam31Widget = this.widget("sam31_config");
+        if (sam31Widget) {
+            sam31Widget.value = widgets.sam31_config || JSON.stringify(normalizeSam31Config());
+        }
+        for (const name of ["steps", "sampler", "scheduler", "cfg", "shift_video", "shift_audio", "seed", ...SAM31_WIDGET_NAMES]) {
             if (widgets[name] == null || widgets[name] === "") continue;
             const w = this.widget(name);
             if (w) w.value = widgets[name];
@@ -10088,6 +10098,7 @@ class H3_D_NEOEditor {
     }
 
     render() {
+        this.syncSAM31Panel?.();
         if (this.isPlaying) {
             this.renderTimelineOnly();
             return;
@@ -10528,6 +10539,7 @@ class H3_D_NEOEditor {
     formatTime(frames) { return (frames / this.getFrameRate()).toFixed(2); }
 
     updateSelectionUI() {
+        this.syncSAM31Panel?.();
         this.timeline.global = this.timeline.global || { taskType: "", prompt: "", refs: [] };
         if (this._snapshotSelector) this._snapshotSelector.render();
         else if (this.globalTask) this.globalTask.value = this.timeline.global.taskType || "";

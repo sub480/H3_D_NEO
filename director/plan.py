@@ -342,6 +342,9 @@ class SegmentPlan:
     seed_mode: str = "inherit"
     seed: int = 0
     resolved_seed: int | None = field(default=None, repr=False)
+    # Original group metadata binds normal SAM object masks to this V2V group.
+    sam31_group: dict | None = field(default=None, repr=False)
+    sam31_composite: dict | None = field(default=None, repr=False)
 
     @property
     def frame_count(self) -> int:
@@ -424,6 +427,7 @@ class DirectorPlan:
     selflift: dict | None = None
     semantic_bridge: dict | None = None
     face_refine: dict | None = None
+    sam31: dict | None = None
     # Sampling knobs stamped at execute time (first-pass cache fingerprint).
     sample_seed: int = 0
     sample_cfg: float = 1.0

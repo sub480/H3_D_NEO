@@ -250,7 +250,7 @@ def _build_minimax_inputs(
                 f"{task_key} segment #{seg.index + 1} has no source frames. "
                 "Upload a video in the Director timeline before running."
             )
-        ref_videos = {"ref_video_0": clip_frames}
+        ref_videos = None if getattr(seg, "sam31_composite", None) is not None else {"ref_video_0": clip_frames}
         if task_key == "rv2v":
             # Refs are optional per segment: with refs → <Video 1>+<Picture N>;
             # without refs → same as v2v (source edit only).
@@ -430,6 +430,14 @@ def execute_director_plan_core(
     live_tae_preview = raw_live in (True, 1, "1", "true", "True", "on")
 
     all_segments = plan.segments
+    from .sam31_composite import prepare as prepare_sam31_composite
+    sam31_run_indices = plan.run_indices if plan.run_indices is not None else frozenset(range(len(all_segments)))
+    for segment in all_segments:
+        if segment.index in sam31_run_indices:
+            prepare_sam31_composite(plan, segment)
+            if segment.sam31_composite is not None:
+                from .sam31_masked import preflight as masked_edit_preflight
+                masked_edit_preflight(plan, segment, _model_for_segment(segment, model, model_r2v))
     # Drop caches for deleted/shortened timelines. Keep unselected segment caches
     # intact so a later selection can still reuse its own valid first-pass state.
     prune_segment_cache(node_id, [seg.index for seg in all_segments])
@@ -584,7 +592,14 @@ def execute_director_plan_core(
         target_len = max(1, int(seg.frame_count or plan.total_frames or 124))
         output_width = seg.output_width or plan.width
         output_height = seg.output_height or plan.height
-        if seg.source_clip is not None:
+        sam31_context = getattr(seg, "sam31_composite", None)
+        sam31_transforms = []
+        sam31_source = None
+        if sam31_context is not None:
+            from .sam31_composite import source_frames as sam31_source_frames
+            body_raw = sam31_source_frames(seg)
+            target_len = int(body_raw.shape[0])
+        elif seg.source_clip is not None:
             body_raw = seg.source_clip
             target_len = max(target_len, int(body_raw.shape[0]))
         else:
@@ -599,10 +614,12 @@ def execute_director_plan_core(
                 clip_frames = fit_frames_to_canvas(
                     body_raw, output_width, output_height, video_fit
                 )
+                sam31_transforms.append((video_fit, output_width, output_height))
             else:
                 # long_edge may leave storage-sized frames (e.g. 496) that are not
                 # 32-aligned; lock to the resolved plan canvas after the long-edge fit.
                 clip_frames = fit_video_long_edge(body_raw, plan.ref_max_size)
+                sam31_transforms.append(("stretch", int(clip_frames.shape[2]), int(clip_frames.shape[1])))
                 if (
                     int(clip_frames.shape[1]) != int(plan.height)
                     or int(clip_frames.shape[2]) != int(plan.width)
@@ -610,10 +627,13 @@ def execute_director_plan_core(
                     clip_frames = fit_frames_to_canvas(
                         clip_frames, plan.width, plan.height, video_fit
                     )
+                    sam31_transforms.append((video_fit, plan.width, plan.height))
         else:
             clip_frames = None
 
         num_frames = minimax_align_frame_count(target_len)
+        if sam31_context is not None:
+            sam31_source = clip_frames
         if clip_frames is not None:
             clip_frames, _ = prepare_segment_clip(
                 clip_frames,
@@ -742,7 +762,7 @@ def execute_director_plan_core(
                 has_end_frame=has_end,
                 has_start_frame=has_start,
             )
-        elif seg.task_key == "r2v":
+        elif seg.task_key == "r2v" or (sam31_context is not None and seg.task_key == "rv2v"):
             ref_idxs = [int(getattr(r, "index", 0)) for r in (seg.refs or []) if r is not None]
             vid_idxs = [int(getattr(v, "index", 0)) for v in (getattr(seg, "ref_videos", None) or []) if v is not None]
             audio_idxs = [int(getattr(a, "index", 0)) for a in (seg.ref_audios or []) if a is not None]
@@ -752,9 +772,9 @@ def execute_director_plan_core(
                 video_indices=vid_idxs,
                 audio_indices=audio_idxs,
             )
-        elif seg.task_key == "v2v":
+        elif seg.task_key == "v2v" and sam31_context is None:
             positive_prompt = reinforce_v2v_prompt(positive_prompt)
-        elif seg.task_key == "rv2v":
+        elif seg.task_key == "rv2v" and sam31_context is None:
             ref_idxs = [int(getattr(r, "index", 0)) for r in (seg.refs or []) if r is not None]
             audio_idxs = [int(getattr(a, "index", 0)) for a in (seg.ref_audios or []) if a is not None]
             positive_prompt = reinforce_rv2v_prompt(
@@ -766,6 +786,10 @@ def execute_director_plan_core(
             resolve_lora_trigger_words(plan, seg.task_key),
             task_key=seg.task_key,
         )
+
+        if sam31_context is not None:
+            from .sam31_masked import source_prompt
+            positive_prompt = source_prompt(positive_prompt)
 
         report_director_progress(
             node_id, segment_index=progress_index, segment_total=seg_total,
@@ -822,6 +846,19 @@ def execute_director_plan_core(
             ref_audios=ref_audios,
             ref_image_size=official_ref_image_size(resolve_ref_image_size(seg, plan)),
         )
+
+        if sam31_context is not None and not skip_first_sample:
+            from .sam31_masked import initialize as initialize_masked_edit, pixel_masks
+            from .audio_export import AUDIO_MODE_SOURCE, _extract_segment_source_audio
+
+            source_audio = _extract_segment_source_audio(plan, seg) if audio_mode == AUDIO_MODE_SOURCE else None
+            generation_mask = pixel_masks(seg, sam31_source, sam31_transforms)
+            latent = initialize_masked_edit(
+                latent, sam31_source, generation_mask, vae,
+                grow=sam31_context["settings"]["grow"], audio_mode=audio_mode,
+                audio_vae=audio_vae, source_audio=source_audio,
+            )
+            del generation_mask, source_audio
 
         from .semantic_bridge import apply_semantic_bridge
         positive, sb_note = apply_semantic_bridge(positive, plan, task_key=seg.task_key)
@@ -1428,6 +1465,14 @@ def execute_director_plan_core(
                 node_id, segment_index=progress_index, segment_total=seg_total,
                 phase="face_refine", phase_value=1, phase_max=1, **meta,
             )
+        if sam31_context is not None and not _first_pass_phase:
+            from .sam31_composite import apply as apply_sam31_composite
+            if trim_frames:
+                raise ValueError("SAM3.1 蒙版合成不支持连续性前缀裁剪，请关闭段间引导。")
+            # Final pixel stage: FaceRefine cannot alter regions outside the
+            # explicitly selected mask. Generated AV latent remains uncomposited.
+            chunk = apply_sam31_composite(chunk, sam31_source, seg, transforms=sam31_transforms)
+            log.info("SAM3.1 segment %s: composited %s selected object(s)", ui_idx + 1, len(sam31_context["selected"]))
         handoff = {
             "trim_frames": int(trim_frames),
             "export_frames": int(chunk.shape[0]),
@@ -1444,7 +1489,7 @@ def execute_director_plan_core(
             timeline_seg_total=timeline_seg_total,
             will_refine=will_refine,
         )
-        if write_cache:
+        if write_cache and not (_first_pass_phase and sam31_context is not None):
             save_segment_cache(
                 node_id,
                 seg,
@@ -1489,9 +1534,10 @@ def execute_director_plan_core(
             try:
                 from .tae_preview import LIVE_PREVIEW_FPS, pixel_frames_to_preview_jpegs
 
-                frames_b64 = pixel_frames_to_preview_jpegs(decoded)
+                preview_pixels = chunk if sam31_context is not None and not _first_pass_phase else decoded
+                frames_b64 = pixel_frames_to_preview_jpegs(preview_pixels)
                 if frames_b64:
-                    h, w = int(decoded.shape[1]), int(decoded.shape[2])
+                    h, w = int(preview_pixels.shape[1]), int(preview_pixels.shape[2])
                     report_director_segment_preview(
                         node_id,
                         segment_index=ui_idx,

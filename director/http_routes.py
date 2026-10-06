@@ -762,6 +762,13 @@ def register_routes() -> bool:
     _register_route(routes, "GET", "/minimax/director/list_input_media", minimax_list_input_media)
     _register_route(routes, "GET", "/minimax/director/list_vae_approx", minimax_list_vae_approx)
     _register_route(routes, "GET", "/minimax/director/list_drawer_models", minimax_list_drawer_models)
+    from .sam31_routes import (
+        sam31_capabilities, sam31_submit, sam31_job_status, sam31_preview,
+    )
+    _register_route(routes, "GET", "/minimax/director/sam31/capabilities", sam31_capabilities)
+    _register_route(routes, "POST", "/minimax/director/sam31/submit", sam31_submit)
+    _register_route(routes, "GET", "/minimax/director/sam31/job", sam31_job_status)
+    _register_route(routes, "POST", "/minimax/director/sam31/preview", sam31_preview)
     _register_route(
         routes,
         "POST",

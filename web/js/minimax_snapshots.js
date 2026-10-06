@@ -2,9 +2,10 @@
 import { api } from "../../scripts/api.js";
 import { t, applyI18nDom } from "./minimax_i18n.js";
 import { resolveMixedGroupKey, resolveTaskKey } from "./minimax_gen_timeline.js";
+import { SAM31_WIDGET_NAMES } from "./minimax_sam31.js";
 
 const MAX_NAME = 80;
-const SNAPSHOT_WIDGET_NAMES = ["steps", "sampler", "scheduler", "cfg", "shift_video", "shift_audio", "seed"];
+const SNAPSHOT_WIDGET_NAMES = ["steps", "sampler", "scheduler", "cfg", "shift_video", "shift_audio", "seed", ...SAM31_WIDGET_NAMES];
 
 async function request(path, body, method = "POST") {
     const options = { method, headers: { "Content-Type": "application/json" } };

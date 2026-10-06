@@ -506,6 +506,11 @@ function controlAfterWidget(node) {
 }
 
 export function closePassPanels(editor, except) {
+    if (except !== "sam31") {
+        editor._mmxSAM31PanelOpen = false;
+        editor.sam31PanelEl?.classList.add("hidden");
+        editor.pauseSAM31Panel?.();
+    }
     if (except !== "sample") {
         editor._mmxSamplePanelOpen = false;
         editor.samplePanelEl?.classList.add("hidden");

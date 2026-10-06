@@ -268,6 +268,8 @@ def _segment_identity_fingerprint(seg: SegmentPlan, plan: DirectorPlan) -> dict[
 def first_pass_cache_fingerprint(seg: SegmentPlan, plan: DirectorPlan) -> dict[str, Any]:
     """Exact-match key for first-pass AV latent. Refine knobs are excluded."""
     fp = _segment_identity_fingerprint(seg, plan)
+    from .sam31_composite import fingerprint as sam31_composite_fingerprint
+    fp.update(sam31_composite_fingerprint(seg, first_pass=True))
     fp.update({
         "kind": "first_pass",
         "seed": resolve_segment_seed(seg, getattr(plan, "sample_seed", 0)),
@@ -292,6 +294,8 @@ def first_pass_cache_fingerprint(seg: SegmentPlan, plan: DirectorPlan) -> dict[s
 def segment_cache_fingerprint(seg: SegmentPlan, plan: DirectorPlan) -> dict[str, Any]:
     """Stable identity for a segment — cache invalidates when edit params change."""
     fp = _segment_identity_fingerprint(seg, plan)
+    from .sam31_composite import fingerprint as sam31_composite_fingerprint
+    fp.update(sam31_composite_fingerprint(seg))
     if fp.get("continuity"):
         previous = _previous_run_segment(seg, plan)
         if previous is not None:
@@ -1318,9 +1322,14 @@ def inspect_first_pass_cache(
                 read_error = str(exc)
                 cache_exists = False
 
+        from .sam31_composite import enabled as sam31_composite_enabled
+        sam31_unchecked = sam31_composite_enabled(seg) and seg.sam31_composite is None
         expected = first_pass_cache_fingerprint(seg, plan)
         stored_cmp, expected_cmp = _align_cache_fingerprint(stored, expected)
-        matches = bool(cache_exists and isinstance(stored, dict) and stored_cmp == expected_cmp)
+        matches = bool(
+            not sam31_unchecked
+            and cache_exists and isinstance(stored, dict) and stored_cmp == expected_cmp
+        )
         diff = (
             _fingerprint_diff_keys(stored_cmp, expected_cmp)
             if isinstance(stored_cmp, dict)
@@ -1330,7 +1339,11 @@ def inspect_first_pass_cache(
             matches = False
             if "seed" not in diff:
                 diff.append("seed")
-        if not cache_exists:
+        if sam31_unchecked:
+            status = "unchecked"
+            diff = []
+            read_error = read_error or "SAM3.1 源参考指纹尚未校验；实际运行时会执行完整预检。"
+        elif not cache_exists:
             status = "missing"
         elif matches:
             status = "valid"

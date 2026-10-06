@@ -916,6 +916,7 @@ def build_gen_director_plan(
                 ),
                 seed_mode=seg_seed_mode,
                 seed=seg_seed,
+                sam31_group=seg_data,
             )
         )
 

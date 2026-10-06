@@ -10,6 +10,10 @@ import comfy.samplers
 
 from ..director.executor_core import execute_director_plan_core
 from ..director.refine_pack import pack_director_builtin_refine
+from ..director.sam31_config import (
+    normalize_config as normalize_sam31_config,
+    sam31_widget_inputs,
+)
 from .director_common import (
     finalize_director_outputs,
     prepare_director_plan,
@@ -276,6 +280,7 @@ class H3_D_NEO:
                 **director_selflift_widget_inputs(),
                 **director_semantic_bridge_widget_inputs(),
                 **director_face_refine_widget_inputs(),
+                **sam31_widget_inputs(),
             },
             "hidden": {"unique_id": "UNIQUE_ID"},
         }
@@ -304,6 +309,11 @@ class H3_D_NEO:
 
     @classmethod
     def IS_CHANGED(cls, unique_id=None, **kwargs):
+        from ..director.sam31_composite import execution_required as sam31_execution_required
+        if sam31_execution_required(kwargs.get("timeline_data")):
+            # Still reuse valid H3 first-pass disk caches, but never skip the
+            # external source/mask preflight via ComfyUI's node-output cache.
+            return float("nan")
         # Fingerprint both execution inputs and .pre cache files.  The old
         # implementation discarded kwargs and therefore returned the same
         # value when only timeline_data/runSelection changed; ComfyUI then
@@ -427,6 +437,7 @@ class H3_D_NEO:
                 tile_count=kwargs.get("selflift_tile_count", 2),
                 tile_overlap=kwargs.get("selflift_tile_overlap", 128),
             )
+        sam31 = normalize_sam31_config(kwargs.pop("sam31_config", None))
         refine = pack_director_builtin_refine(
             enabled=refine_enabled,
             refine_model=refine_model,
@@ -451,6 +462,7 @@ class H3_D_NEO:
             semantic_bridge=semantic_bridge_pack,
             face_refine=face_refine,
             refine=refine,
+            sam31=sam31,
             lora_trigger_words=lora_trigger_words,
             lora_trigger_words_r2v=lora_trigger_words_r2v,
         )
