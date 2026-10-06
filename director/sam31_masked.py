@@ -22,9 +22,12 @@ def source_prompt(prompt):
 
 def preflight(plan, seg, model):
     from .plan import resolve_segment_pass_mode
+    from .refine_pack import refine_will_sample
     from .selflift.pack import selflift_enabled
 
-    if resolve_segment_pass_mode(seg) == "second":
+    # Old groups may retain "second" even when the Refine drawer is disabled.
+    # Match the executor's actual second-pass condition, not the saved label.
+    if resolve_segment_pass_mode(seg) == "second" and refine_will_sample(plan, seg):
         raise ValueError("SAM3.1 source-latent edit: disable second pass; it bypasses the generation mask.")
     if selflift_enabled(plan) or (getattr(plan, "face_refine", None) or {}).get("enabled"):
         raise ValueError("SAM3.1 source-latent edit: disable SelfLift and FaceRefine.")

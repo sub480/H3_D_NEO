@@ -194,9 +194,21 @@ class MaskedTests(unittest.TestCase):
         seg = NS(pass_mode="first")
         with patch.dict(sys.modules, {plan_module.__name__: plan_module, lift_module.__name__: lift_module}):
             masked.preflight(plan, seg, model)
+            # A stale per-group label must not be confused with an active pass.
+            for inactive in (None, {}, {"enabled": False}):
+                p, s = copy.deepcopy(plan), copy.deepcopy(seg)
+                p.refine = inactive
+                s.pass_mode = "second"
+                with self.subTest(inactive=inactive):
+                    masked.preflight(p, s, model)
+            p = copy.deepcopy(plan)
+            p.refine = {"enabled": True}
+            masked.preflight(p, seg, model)  # first-only group, global Refine on
             for mode in ("second", "selflift", "face", "native"):
                 p, s, m = copy.deepcopy(plan), copy.deepcopy(seg), copy.deepcopy(model)
-                if mode == "second": s.pass_mode = "second"
+                if mode == "second":
+                    s.pass_mode = "second"
+                    p.refine = {"enabled": True}
                 if mode == "selflift": p.selflift = {"enabled": True}
                 if mode == "face": p.face_refine["enabled"] = True
                 if mode == "native": m.model.diffusion_model._forward = lambda x: x
